@@ -7,7 +7,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.time.Duration;
 
 /**
- * 네이버 API 호출을 위한 WebClient 설정
+ * 네이버 API 및 쿠팡 API 호출을 위한 WebClient 설정
  */
 @Configuration
 public class WebClientConfig {
@@ -21,10 +21,23 @@ public class WebClientConfig {
                 .defaultHeader("Content-Type", "application/json");
     }
     
+    /**
+     * 네이버 커머스 API용 WebClient
+     */
     @Bean
     public WebClient webClient(WebClient.Builder builder) {
         return builder
                 .baseUrl("https://api.commerce.naver.com")
+                .build();
+    }
+    
+    /**
+     * 쿠팡 오픈 API용 WebClient
+     */
+    @Bean
+    public WebClient coupangWebClient(WebClient.Builder builder) {
+        return builder
+                .baseUrl("https://api-gateway.coupang.com")
                 .build();
     }
 }

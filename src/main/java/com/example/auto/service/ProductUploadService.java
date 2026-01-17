@@ -56,16 +56,23 @@ public class ProductUploadService {
         // 파일 검증
         validateFile(file);
         
-        // 현재 스토어 조회
-        Store currentStore = storeService.getCurrentStore()
-                .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
+        // 플랫폼 정규화
+        String platformLower = PlatformConstants.normalize(platform);
+        
+        // 스토어 조회 (쿠팡은 스토어가 필요 없음)
+        Long storeId = null;
+        if (!PlatformConstants.COUPANG.equals(platformLower)) {
+            // 네이버 등 다른 플랫폼은 스토어가 필요함
+            Store currentStore = storeService.getCurrentStore()
+                    .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
+            storeId = currentStore.getId();
+        }
         
         // 엑셀 파일 파싱
         List<Map<String, Object>> excelRows = parseExcelFile(file);
         
         // 플랫폼별 배치 업로드 실행
-        String platformLower = PlatformConstants.normalize(platform);
-        ExcelUploadResult result = executeBatchUpload(platformLower, currentStore.getId(), excelRows);
+        ExcelUploadResult result = executeBatchUpload(platformLower, storeId, excelRows);
         
         log.info("상품 업로드 서비스 완료: 플랫폼={}, 총 {}개, 성공 {}개, 실패 {}개", 
                 platformLower, result.getTotalCount(), result.getSuccessCount(), result.getFailureCount());
