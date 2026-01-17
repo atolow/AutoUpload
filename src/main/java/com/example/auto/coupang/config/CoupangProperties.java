@@ -20,4 +20,5 @@ public class CoupangProperties {
     private String secretKey;
     private String apiBaseUrl = "https://api-gateway.coupang.com";
     private String market = "KR";
+    private Long outboundShippingPlaceCode; // 출고지 주소 코드 (쿠팡 판매자 센터에서 등록한 주소록의 코드)
 }

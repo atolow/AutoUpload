@@ -21,6 +21,9 @@ public class CoupangExcelToProductConverter {
     private final com.example.auto.coupang.client.CoupangApiClient coupangApiClient;
     private final com.example.auto.coupang.config.CoupangProperties coupangProperties;
     
+    // 출고지 코드 캐시 (한 번 조회하면 재사용)
+    private Long cachedOutboundShippingPlaceCode = null;
+    
     /**
      * 엑셀 행 데이터를 쿠팡 API 상품 등록 형식으로 변환
      * 
@@ -236,8 +239,9 @@ public class CoupangExcelToProductConverter {
         // returnCharge: 반품배송비
         productData.put("returnCharge", 2500);
         
-        // outboundShippingPlaceCode: 출고지주소코드 (묶음 배송 선택할 경우 필수)
-        productData.put("outboundShippingPlaceCode", 0); // 실제 운영 시에는 출고지 조회 API로 가져와야 함
+        // outboundShippingPlaceCode: 출고지주소코드 (필수)
+        Long outboundShippingPlaceCode = getOutboundShippingPlaceCode(rowNumber);
+        productData.put("outboundShippingPlaceCode", outboundShippingPlaceCode);
         
         // 필수 필드: 이미지 (상품 이미지)
         List<String> productImages = new ArrayList<>();
@@ -701,5 +705,103 @@ public class CoupangExcelToProductConverter {
             }
         }
         return null;
+    }
+    
+    /**
+     * 출고지 주소 코드 조회
+     * 1. 설정 파일에서 먼저 확인
+     * 2. 없으면 캐시 확인
+     * 3. 캐시도 없으면 API 호출하여 조회
+     * 
+     * @param rowNumber 행 번호 (에러 메시지용)
+     * @return 출고지 주소 코드
+     */
+    private Long getOutboundShippingPlaceCode(Integer rowNumber) {
+        // 1. 설정 파일에서 먼저 확인
+        Long outboundShippingPlaceCode = coupangProperties.getOutboundShippingPlaceCode();
+        if (outboundShippingPlaceCode != null && outboundShippingPlaceCode != 0) {
+            log.debug("행 {}: 설정 파일에서 출고지 코드 사용: {}", rowNumber, outboundShippingPlaceCode);
+            return outboundShippingPlaceCode;
+        }
+        
+        // 2. 캐시 확인
+        if (cachedOutboundShippingPlaceCode != null && cachedOutboundShippingPlaceCode != 0) {
+            log.debug("행 {}: 캐시에서 출고지 코드 사용: {}", rowNumber, cachedOutboundShippingPlaceCode);
+            return cachedOutboundShippingPlaceCode;
+        }
+        
+        // 3. API 호출하여 조회
+        try {
+            log.info("행 {}: 출고지 코드가 설정되지 않아 API로 조회합니다...", rowNumber);
+            Map<String, Object> response = coupangApiClient.getOutboundShippingCenters().block();
+            
+            if (response != null) {
+                // 응답 코드 확인
+                Object codeObj = response.get("code");
+                boolean isSuccess = "SUCCESS".equals(String.valueOf(codeObj)) || 
+                                  "200".equals(String.valueOf(codeObj)) ||
+                                  (codeObj instanceof Number && ((Number) codeObj).intValue() == 200);
+                
+                if (isSuccess && response.containsKey("data")) {
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> centers = (List<Map<String, Object>>) response.get("data");
+                    
+                    if (centers != null && !centers.isEmpty()) {
+                        // 첫 번째 출고지 코드 사용
+                        Map<String, Object> firstCenter = centers.get(0);
+                        Object codeObj2 = firstCenter.get("outboundShippingPlaceCode");
+                        
+                        if (codeObj2 != null) {
+                            Long code;
+                            if (codeObj2 instanceof Number) {
+                                code = ((Number) codeObj2).longValue();
+                            } else {
+                                code = Long.parseLong(String.valueOf(codeObj2));
+                            }
+                            
+                            // 캐시에 저장
+                            cachedOutboundShippingPlaceCode = code;
+                            
+                            String centerName = String.valueOf(firstCenter.get("name"));
+                            log.info("행 {}: 출고지 코드 조회 성공: {} (출고지명: {})", rowNumber, code, centerName);
+                            
+                            if (centers.size() > 1) {
+                                log.info("행 {}: 총 {}개의 출고지가 있습니다. 첫 번째 출고지를 사용합니다.", rowNumber, centers.size());
+                            }
+                            
+                            return code;
+                        } else {
+                            throw new IllegalArgumentException(String.format(
+                                "행 %d: 출고지 코드(outboundShippingPlaceCode)가 응답에 없습니다.",
+                                rowNumber));
+                        }
+                    } else {
+                        throw new IllegalArgumentException(String.format(
+                            "행 %d: 등록된 출고지가 없습니다. 쿠팡 판매자 센터(https://wing.coupang.com) > 판매자 주소록에서 출고지를 먼저 등록해주세요.",
+                            rowNumber));
+                    }
+                } else {
+                    String message = String.valueOf(response.get("message"));
+                    throw new IllegalArgumentException(String.format(
+                        "행 %d: 출고지 조회 실패: %s",
+                        rowNumber, message != null ? message : "알 수 없는 오류"));
+                }
+            } else {
+                throw new IllegalArgumentException(String.format(
+                    "행 %d: 출고지 조회 응답이 null입니다.",
+                    rowNumber));
+            }
+        } catch (IllegalArgumentException e) {
+            // 이미 IllegalArgumentException이면 그대로 전달
+            throw e;
+        } catch (Exception e) {
+            log.error("행 {}: 출고지 코드 조회 중 오류 발생", rowNumber, e);
+            throw new IllegalArgumentException(String.format(
+                "행 %d: 출고지 코드를 조회할 수 없습니다: %s. " +
+                "다음 중 하나를 시도해주세요:\n" +
+                "1. 쿠팡 판매자 센터에서 출고지를 먼저 등록\n" +
+                "2. application-secret.properties 파일에 'coupang.api.outbound-shipping-place-code=출고지코드' 직접 설정",
+                rowNumber, e.getMessage()));
+        }
     }
 }

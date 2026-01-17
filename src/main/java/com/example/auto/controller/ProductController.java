@@ -861,5 +861,50 @@ public class ProductController {
                     String.format("%s 메서드 호출 중 오류가 발생했습니다: %s", methodName, e.getMessage()), e);
         }
     }
+    
+    /**
+     * 쿠팡 출고지 목록 조회
+     * 쿠팡 판매자 센터에 등록된 출고지 목록을 조회합니다.
+     * 
+     * @return 출고지 목록 (outboundShippingPlaceCode 포함)
+     */
+    @Operation(summary = "쿠팡 출고지 목록 조회", description = "쿠팡 판매자 센터에 등록된 출고지 목록을 조회합니다.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "출고지 목록 조회 성공"),
+            @ApiResponse(responseCode = "400", description = "잘못된 요청"),
+            @ApiResponse(responseCode = "500", description = "서버 오류")
+    })
+    @GetMapping("/coupang/shipping-centers")
+    public ResponseEntity<?> getCoupangShippingCenters() {
+        try {
+            log.info("쿠팡 출고지 목록 조회 요청");
+            
+            // 쿠팡 API 클라이언트 직접 주입
+            com.example.auto.coupang.client.CoupangApiClient coupangApiClient = 
+                    applicationContext.getBean(com.example.auto.coupang.client.CoupangApiClient.class);
+            
+            Map<String, Object> response = coupangApiClient.getOutboundShippingCenters().block();
+            
+            if (response != null) {
+                log.info("쿠팡 출고지 목록 조회 성공");
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.internalServerError()
+                        .body(Map.of("error", "출고지 목록 조회 응답이 null입니다.", 
+                                "code", "INTERNAL_ERROR"));
+            }
+            
+        } catch (IllegalArgumentException e) {
+            log.error("쿠팡 출고지 목록 조회 실패: {}", e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", e.getMessage(), "code", "VALIDATION_ERROR"));
+                    
+        } catch (Exception e) {
+            log.error("쿠팡 출고지 목록 조회 중 오류 발생", e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "출고지 목록 조회 중 오류가 발생했습니다: " + e.getMessage(), 
+                            "code", "INTERNAL_ERROR"));
+        }
+    }
 }
 

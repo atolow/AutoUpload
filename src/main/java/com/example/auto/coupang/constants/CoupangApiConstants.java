@@ -58,6 +58,17 @@ public final class CoupangApiConstants {
         
         private Category() {}
     }
+    
+    /**
+     * 출고지 관련 API 경로
+     */
+    public static final class ShippingCenter {
+        // 출고지 목록 조회 (최신 API 경로)
+        // GET /v2/providers/marketplace_openapi/apis/api/v2/vendor/shipping-place/outbound
+        public static final String LIST = "/v2/providers/marketplace_openapi/apis/api/v2/vendor/shipping-place/outbound";
+        
+        private ShippingCenter() {}
+    }
 
     /**
      * 기본 페이지 크기

@@ -15,6 +15,9 @@ import reactor.core.publisher.Mono;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -61,21 +64,26 @@ public class CoupangApiClient {
 
     /**
      * 쿼리 스트링 생성
+     * 쿠팡 API는 쿼리 파라미터 순서가 서명에 영향을 주므로 알파벳 순으로 정렬합니다.
      */
     private String buildQueryString(Map<String, String> params) {
         if (params == null || params.isEmpty()) {
             return "";
         }
         
+        // 키를 알파벳 순으로 정렬하여 서명 일관성 보장
+        List<String> sortedKeys = new ArrayList<>(params.keySet());
+        Collections.sort(sortedKeys);
+        
         StringBuilder queryString = new StringBuilder();
         boolean first = true;
-        for (Map.Entry<String, String> entry : params.entrySet()) {
+        for (String key : sortedKeys) {
             if (!first) {
                 queryString.append("&");
             }
-            queryString.append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8))
+            queryString.append(URLEncoder.encode(key, StandardCharsets.UTF_8))
                       .append("=")
-                      .append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+                      .append(URLEncoder.encode(params.get(key), StandardCharsets.UTF_8));
             first = false;
         }
         return queryString.toString();
@@ -368,10 +376,21 @@ public class CoupangApiClient {
                     if ("SUCCESS".equals(code) || response.containsKey("data")) {
                         log.info("상품 등록 성공: {}", response);
                         if (response.containsKey("data")) {
-                            @SuppressWarnings("unchecked")
-                            Map<String, Object> data = (Map<String, Object>) response.get("data");
-                            if (data != null && data.containsKey("sellerProductId")) {
-                                log.info("등록된 상품 ID: {}", data.get("sellerProductId"));
+                            Object dataObj = response.get("data");
+                            if (dataObj != null) {
+                                // data가 Long 타입인 경우 (상품 ID 직접 반환)
+                                if (dataObj instanceof Number) {
+                                    Long productId = ((Number) dataObj).longValue();
+                                    log.info("등록된 상품 ID: {}", productId);
+                                } 
+                                // data가 Map 타입인 경우 (sellerProductId 포함)
+                                else if (dataObj instanceof Map) {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> data = (Map<String, Object>) dataObj;
+                                    if (data.containsKey("sellerProductId")) {
+                                        log.info("등록된 상품 ID: {}", data.get("sellerProductId"));
+                                    }
+                                }
                             }
                         }
                         return Mono.just(response);
@@ -570,5 +589,86 @@ public class CoupangApiClient {
                         log.error("카테고리 추천 실패", error);
                     }
                 });
+    }
+
+    /**
+     * 출고지 목록 조회
+     * 쿠팡 판매자 센터에 등록된 출고지 목록을 조회합니다.
+     * 
+     * API 경로: GET /v2/providers/marketplace_openapi/apis/api/v2/vendor/shipping-place/outbound
+     * 쿼리 파라미터: 
+     *   - vendorId (필수)
+     *   - pageNum (필수, pageSize와 함께 사용)
+     *   - pageSize (필수, pageNum과 함께 사용, 최대 50)
+     * 
+     * @param pageNum 페이지 번호 (기본값: 1)
+     * @param pageSize 페이지 크기 (기본값: 50, 최대: 50)
+     * @return 출고지 목록 응답 (outboundShippingPlaceCode 포함)
+     */
+    public Mono<Map<String, Object>> getOutboundShippingCenters(Integer pageNum, Integer pageSize) {
+        String path = CoupangApiConstants.ShippingCenter.LIST;
+        
+        // 기본값 설정 및 최대값 제한 (쿠팡 API는 최대 50까지만 허용)
+        int page = (pageNum != null && pageNum > 0) ? pageNum : 1;
+        int size = (pageSize != null && pageSize > 0) ? Math.min(pageSize, 50) : 50;
+        
+        Map<String, String> params = Map.of(
+                "vendorId", properties.getVendorId(),
+                "pageNum", String.valueOf(page),
+                "pageSize", String.valueOf(size)
+        );
+        String queryString = buildQueryString(params);
+        
+        String fullUrl = properties.getApiBaseUrl() + path + "?" + queryString;
+        log.info("출고지 목록 조회 요청: URL={}, vendorId={}, pageNum={}, pageSize={}", 
+                fullUrl, properties.getVendorId(), page, size);
+        
+        HttpHeaders headers = createHeaders("GET", path, queryString);
+        
+        // 쿼리 스트링이 이미 정렬되어 있으므로 직접 URL에 추가
+        String uri = path + (queryString.isEmpty() ? "" : "?" + queryString);
+        
+        return coupangWebClient.get()
+                .uri(uri)
+                .headers(httpHeaders -> httpHeaders.addAll(headers))
+                .retrieve()
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                .doOnSuccess(response -> {
+                    log.info("출고지 목록 조회 성공: vendorId={}", properties.getVendorId());
+                    if (response.containsKey("data")) {
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> centers = (List<Map<String, Object>>) response.get("data");
+                        if (centers != null && !centers.isEmpty()) {
+                            log.info("출고지 {}개 발견", centers.size());
+                            for (int i = 0; i < centers.size(); i++) {
+                                Map<String, Object> center = centers.get(i);
+                                log.info("출고지[{}]: outboundShippingPlaceCode={}, name={}", 
+                                        i, 
+                                        center.get("outboundShippingPlaceCode"),
+                                        center.get("name"));
+                            }
+                        } else {
+                            log.warn("출고지가 등록되어 있지 않습니다. 쿠팡 판매자 센터에서 출고지를 먼저 등록해주세요.");
+                        }
+                    }
+                })
+                .doOnError(error -> {
+                    if (error instanceof WebClientResponseException ex) {
+                        String responseBody = ex.getResponseBodyAsString();
+                        log.error("출고지 목록 조회 실패: status={}, URL={}", ex.getStatusCode(), fullUrl);
+                        log.error("응답 본문: {}", responseBody != null ? responseBody : "null");
+                    } else {
+                        log.error("출고지 목록 조회 실패", error);
+                    }
+                });
+    }
+    
+    /**
+     * 출고지 목록 조회 (기본 페이지 파라미터 사용)
+     * 
+     * @return 출고지 목록 응답 (outboundShippingPlaceCode 포함)
+     */
+    public Mono<Map<String, Object>> getOutboundShippingCenters() {
+        return getOutboundShippingCenters(1, 50);
     }
 }
