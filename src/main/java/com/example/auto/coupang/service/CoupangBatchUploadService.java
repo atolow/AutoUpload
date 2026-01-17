@@ -1,11 +1,10 @@
 package com.example.auto.coupang.service;
 
+import com.example.auto.coupang.client.CoupangApiClient;
+import com.example.auto.coupang.config.CoupangProperties;
 import com.example.auto.dto.ExcelUploadResult;
 import com.example.auto.platform.BatchUploadService;
 import com.example.auto.service.CsvExportService;
-import com.example.auto.service.StoreService;
-import com.example.auto.coupang.client.CoupangApiClient;
-import com.example.auto.coupang.config.CoupangProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

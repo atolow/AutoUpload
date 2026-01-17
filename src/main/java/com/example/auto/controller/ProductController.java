@@ -1,6 +1,8 @@
 package com.example.auto.controller;
 
 import com.example.auto.constants.PlatformConstants;
+import com.example.auto.coupang.client.CoupangApiClient;
+import com.example.auto.domain.Store;
 import com.example.auto.dto.ExcelUploadResult;
 import com.example.auto.dto.GroupProductRequest;
 import com.example.auto.dto.ProductRequest;
@@ -17,18 +19,17 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -70,7 +71,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회
@@ -119,7 +120,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회 및 리플렉션으로 메서드 호출
@@ -178,7 +179,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회
@@ -306,7 +307,8 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회 및 리플렉션으로 메서드 호출
@@ -370,7 +372,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회 및 리플렉션으로 메서드 호출
@@ -514,7 +516,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회 및 리플렉션으로 메서드 호출
@@ -528,7 +530,7 @@ public class ProductController {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", e.getMessage(), "code", "VALIDATION_ERROR"));
                     
-        } catch (org.springframework.web.reactive.function.client.WebClientResponseException e) {
+        } catch (WebClientResponseException e) {
             // 네이버 API 에러 처리
             String errorMessage = "네이버 API 브랜드 조회 실패";
             if (e.getStatusCode().value() == 400) {
@@ -577,7 +579,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회 및 리플렉션으로 메서드 호출
@@ -626,7 +628,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회 및 리플렉션으로 메서드 호출
@@ -673,7 +675,7 @@ public class ProductController {
             String normalizedPlatform = validateAndNormalizePlatform(platform);
             
             // 현재 스토어 조회
-            com.example.auto.domain.Store currentStore = storeService.getCurrentStore()
+            Store currentStore = storeService.getCurrentStore()
                     .orElseThrow(() -> new IllegalArgumentException("등록된 스토어가 없습니다. 먼저 스토어를 등록해주세요."));
             
             // 플랫폼별 ProductService 동적 조회 및 리플렉션으로 메서드 호출
@@ -799,7 +801,7 @@ public class ProductController {
         String beanName = getProductServiceBeanName(platform);
         try {
             return applicationContext.getBean(beanName, ProductService.class);
-        } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
+        } catch (NoSuchBeanDefinitionException e) {
             log.warn("{} 플랫폼의 ProductService를 찾을 수 없습니다: {}", platform, beanName);
             throw new IllegalArgumentException(
                     String.format("%s 플랫폼은 아직 지원되지 않습니다. %s 서비스를 구현해주세요.", 
@@ -814,7 +816,7 @@ public class ProductController {
         String beanName = getProductServiceBeanName(platform);
         try {
             return applicationContext.getBean(beanName);
-        } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
+        } catch (NoSuchBeanDefinitionException e) {
             log.warn("{} 플랫폼의 ProductService를 찾을 수 없습니다: {}", platform, beanName);
             throw new IllegalArgumentException(
                     String.format("%s 플랫폼은 아직 지원되지 않습니다. %s 서비스를 구현해주세요.", 
@@ -880,8 +882,8 @@ public class ProductController {
             log.info("쿠팡 출고지 목록 조회 요청");
             
             // 쿠팡 API 클라이언트 직접 주입
-            com.example.auto.coupang.client.CoupangApiClient coupangApiClient = 
-                    applicationContext.getBean(com.example.auto.coupang.client.CoupangApiClient.class);
+            CoupangApiClient coupangApiClient =
+                    applicationContext.getBean(CoupangApiClient.class);
             
             Map<String, Object> response = coupangApiClient.getOutboundShippingCenters().block();
             

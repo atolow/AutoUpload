@@ -1,9 +1,8 @@
 package com.example.auto.service;
 
-import com.example.auto.naver.client.NaverCommerceClient;
-import com.example.auto.domain.Order;
 import com.example.auto.domain.Product;
 import com.example.auto.domain.Store;
+import com.example.auto.naver.client.NaverCommerceClient;
 import com.example.auto.repository.OrderRepository;
 import com.example.auto.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;

@@ -8,6 +8,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.Set;
+import java.util.HashSet;
 
 /**
  * 쿠팡 엑셀 데이터를 쿠팡 API 형식으로 변환하는 컨버터
@@ -297,31 +299,102 @@ public class CoupangExcelToProductConverter {
         String optionName2 = getStringValue(rowData, "옵션명2");
         String optionValue2 = getStringValue(rowData, "옵션값2");
         
-        // 옵션이 있는 경우
-        if ((optionName1 != null && !optionName1.trim().isEmpty()) || 
-            (optionName2 != null && !optionName2.trim().isEmpty())) {
+        log.info("행 {}: 옵션 정보 수집 - 옵션명1={}, 옵션값1={}, 옵션명2={}, 옵션값2={}, 카테고리={}", 
+                rowNumber, optionName1, optionValue1, optionName2, optionValue2, categoryCode);
+        
+        // 카테고리 메타데이터에서 허용된 옵션명 목록 및 필수 옵션 확인
+        Map<String, Object> categoryOptionInfo = getCategoryOptionInfo(categoryCode, rowNumber);
+        Set<String> allowedOptionNames = (Set<String>) categoryOptionInfo.get("allowedOptionNames");
+        Set<String> requiredOptionNames = (Set<String>) categoryOptionInfo.get("requiredOptionNames");
+        
+        log.info("행 {}: 카테고리 {} 허용된 옵션명 목록: {}", rowNumber, categoryCode, allowedOptionNames);
+        log.info("행 {}: 카테고리 {} 필수 옵션명 목록: {}", rowNumber, categoryCode, requiredOptionNames);
+        
+        // 입력된 옵션을 Map으로 수집 (옵션명 -> 옵션값)
+        Map<String, String> inputOptions = new HashMap<>();
+        if (optionName1 != null && !optionName1.trim().isEmpty() && 
+            optionValue1 != null && !optionValue1.trim().isEmpty()) {
+            inputOptions.put(optionName1.trim(), optionValue1.trim());
+        }
+        if (optionName2 != null && !optionName2.trim().isEmpty() && 
+            optionValue2 != null && !optionValue2.trim().isEmpty()) {
+            inputOptions.put(optionName2.trim(), optionValue2.trim());
+        }
+        
+        // 필수 옵션이 누락되었는지 확인
+        if (requiredOptionNames != null && !requiredOptionNames.isEmpty()) {
+            Set<String> missingRequiredOptions = new HashSet<>(requiredOptionNames);
+            missingRequiredOptions.removeAll(inputOptions.keySet());
             
-            // 옵션 조합 생성
-            List<String> optionNames = new ArrayList<>();
-            List<String> optionValues = new ArrayList<>();
-            
-            if (optionName1 != null && !optionName1.trim().isEmpty() && 
-                optionValue1 != null && !optionValue1.trim().isEmpty()) {
-                optionNames.add(optionName1.trim());
-                optionValues.add(optionValue1.trim());
+            if (!missingRequiredOptions.isEmpty()) {
+                String errorMessage = String.format(
+                    "행 %d: 카테고리 %d에 필수 옵션이 누락되었습니다. " +
+                    "필수 옵션: %s. " +
+                    "엑셀에 다음 컬럼을 추가해주세요: 옵션명3, 옵션값3, 옵션명4, 옵션값4 등",
+                    rowNumber, categoryCode, missingRequiredOptions);
+                log.error(errorMessage);
+                throw new IllegalArgumentException(errorMessage);
             }
+        }
+        
+        // 허용된 옵션만 필터링
+        List<String> validOptionNames = new ArrayList<>();
+        List<String> validOptionValues = new ArrayList<>();
+        
+        for (Map.Entry<String, String> entry : inputOptions.entrySet()) {
+            String optionName = entry.getKey();
+            String optionValue = entry.getValue();
             
-            if (optionName2 != null && !optionName2.trim().isEmpty() && 
-                optionValue2 != null && !optionValue2.trim().isEmpty()) {
-                optionNames.add(optionName2.trim());
-                optionValues.add(optionValue2.trim());
+            if (allowedOptionNames == null || allowedOptionNames.isEmpty() || allowedOptionNames.contains(optionName)) {
+                validOptionNames.add(optionName);
+                validOptionValues.add(optionValue);
+                log.info("행 {}: 옵션명 '{}' 허용됨", rowNumber, optionName);
+            } else {
+                log.warn("행 {}: 옵션명 '{}'는 카테고리 {}에서 허용되지 않습니다. 제외합니다. (허용된 옵션: {})", 
+                        rowNumber, optionName, categoryCode, allowedOptionNames);
             }
+        }
+        
+        // 필수 옵션이 모두 포함되었는지 다시 확인
+        if (requiredOptionNames != null && !requiredOptionNames.isEmpty()) {
+            Set<String> validOptionNamesSet = new HashSet<>(validOptionNames);
+            Set<String> missingRequiredOptions = new HashSet<>(requiredOptionNames);
+            missingRequiredOptions.removeAll(validOptionNamesSet);
             
-            // 옵션 조합으로 item 생성
-            Map<String, Object> item = createItem(rowData, rowNumber, salePrice, stockQuantity, optionNames, optionValues, categoryCode);
+            if (!missingRequiredOptions.isEmpty()) {
+                String errorMessage = String.format(
+                    "행 %d: 카테고리 %d에 필수 옵션이 누락되었습니다. " +
+                    "필수 옵션: %s. " +
+                    "엑셀에 다음 컬럼을 추가해주세요: 옵션명3, 옵션값3, 옵션명4, 옵션값4 등",
+                    rowNumber, categoryCode, missingRequiredOptions);
+                log.error(errorMessage);
+                throw new IllegalArgumentException(errorMessage);
+            }
+        }
+        
+        // 유효한 옵션이 있는 경우 옵션 포함하여 item 생성
+        if (!validOptionNames.isEmpty() && validOptionNames.size() == validOptionValues.size()) {
+            log.info("행 {}: 옵션 포함하여 상품 등록 - 옵션명: {}, 옵션값: {}", rowNumber, validOptionNames, validOptionValues);
+            Map<String, Object> item = createItem(rowData, rowNumber, salePrice, stockQuantity, validOptionNames, validOptionValues, categoryCode);
             items.add(item);
         } else {
-            // 옵션이 없는 경우 단일 item 생성
+            // 옵션이 없거나 모두 제외된 경우
+            if (requiredOptionNames != null && !requiredOptionNames.isEmpty()) {
+                // 필수 옵션이 있는데 옵션이 없으면 에러
+                String errorMessage = String.format(
+                    "행 %d: 카테고리 %d에 필수 옵션이 필요합니다. " +
+                    "필수 옵션: %s. " +
+                    "엑셀에 다음 컬럼을 추가해주세요: 옵션명1, 옵션값1, 옵션명2, 옵션값2 등",
+                    rowNumber, categoryCode, requiredOptionNames);
+                log.error(errorMessage);
+                throw new IllegalArgumentException(errorMessage);
+            }
+            
+            // 필수 옵션이 없는 경우 옵션 없이 등록
+            if ((optionName1 != null && !optionName1.trim().isEmpty()) || 
+                (optionName2 != null && !optionName2.trim().isEmpty())) {
+                log.warn("행 {}: 입력된 옵션이 카테고리 {}에서 허용되지 않아 옵션 없이 상품을 등록합니다.", rowNumber, categoryCode);
+            }
             Map<String, Object> item = createItem(rowData, rowNumber, salePrice, stockQuantity, null, null, categoryCode);
             items.add(item);
         }
@@ -704,6 +777,311 @@ public class CoupangExcelToProductConverter {
                 return null;
             }
         }
+        return null;
+    }
+    
+    /**
+     * 카테고리에서 옵션 정보 조회 (허용된 옵션명 및 필수 옵션명)
+     * 쿠팡 API는 카테고리 메타데이터에 정의된 옵션만 허용합니다.
+     * 
+     * @param categoryCode 카테고리 코드
+     * @param rowNumber 행 번호 (로깅용)
+     * @return Map containing "allowedOptionNames" (Set<String>) and "requiredOptionNames" (Set<String>)
+     */
+    private Map<String, Object> getCategoryOptionInfo(Long categoryCode, Integer rowNumber) {
+        Map<String, Object> result = new HashMap<>();
+        Set<String> allowedOptionNames = new HashSet<>();
+        Set<String> requiredOptionNames = new HashSet<>();
+        
+        if (categoryCode == null) {
+            log.debug("행 {}: 카테고리 코드가 없어 모든 옵션 허용", rowNumber);
+            result.put("allowedOptionNames", null);
+            result.put("requiredOptionNames", new HashSet<>());
+            return result;
+        }
+        
+        try {
+            log.info("행 {}: 카테고리 {} 메타데이터 조회 시작...", rowNumber, categoryCode);
+            // 카테고리 메타데이터 조회
+            Map<String, Object> metadataResponse = coupangApiClient.getCategoryMetadata(categoryCode).block();
+            
+            if (metadataResponse != null) {
+                Object codeObj = metadataResponse.get("code");
+                boolean isSuccess = "SUCCESS".equals(String.valueOf(codeObj)) || 
+                                  "200".equals(String.valueOf(codeObj)) ||
+                                  (codeObj instanceof Number && ((Number) codeObj).intValue() == 200);
+                
+                log.info("행 {}: 카테고리 {} 메타데이터 조회 결과 - code={}, success={}", 
+                        rowNumber, categoryCode, codeObj, isSuccess);
+                
+                if (isSuccess && metadataResponse.containsKey("data")) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> data = (Map<String, Object>) metadataResponse.get("data");
+                    
+                    if (data != null) {
+                        log.debug("행 {}: 카테고리 {} 메타데이터 data 키들: {}", rowNumber, categoryCode, data.keySet());
+                        
+                        // optionGuides 필드 확인 (옵션 가이드 목록)
+                        if (data.containsKey("optionGuides")) {
+                            Object optionGuides = data.get("optionGuides");
+                            log.info("행 {}: 카테고리 {} optionGuides 필드 발견: {}", rowNumber, categoryCode, optionGuides);
+                            
+                            if (optionGuides instanceof List) {
+                                @SuppressWarnings("unchecked")
+                                List<Map<String, Object>> guides = (List<Map<String, Object>>) optionGuides;
+                                
+                                if (guides != null && !guides.isEmpty()) {
+                                    log.info("행 {}: 카테고리 {} 옵션 가이드 {}개 발견", rowNumber, categoryCode, guides.size());
+                                    
+                                    for (Map<String, Object> guide : guides) {
+                                        Object optionName = guide.get("optionName");
+                                        Object required = guide.get("required");
+                                        
+                                        if (optionName != null) {
+                                            String optionNameStr = String.valueOf(optionName);
+                                            allowedOptionNames.add(optionNameStr);
+                                            
+                                            // 필수 옵션 확인
+                                            if (required != null) {
+                                                boolean isRequired = "MANDATORY".equals(String.valueOf(required)) ||
+                                                                     "true".equalsIgnoreCase(String.valueOf(required)) ||
+                                                                     (required instanceof Boolean && (Boolean) required);
+                                                if (isRequired) {
+                                                    requiredOptionNames.add(optionNameStr);
+                                                    log.info("행 {}: 필수 옵션 발견: {}", rowNumber, optionNameStr);
+                                                }
+                                            }
+                                            
+                                            log.debug("행 {}: 허용된 옵션명 추가: {} (필수: {})", rowNumber, optionNameStr, required);
+                                        }
+                                    }
+                                    
+                                    log.info("행 {}: 카테고리 {} 허용된 옵션명 {}개: {}", 
+                                            rowNumber, categoryCode, allowedOptionNames.size(), allowedOptionNames);
+                                    log.info("행 {}: 카테고리 {} 필수 옵션명 {}개: {}", 
+                                            rowNumber, categoryCode, requiredOptionNames.size(), requiredOptionNames);
+                                    
+                                    result.put("allowedOptionNames", allowedOptionNames.isEmpty() ? null : allowedOptionNames);
+                                    result.put("requiredOptionNames", requiredOptionNames);
+                                    return result;
+                                } else {
+                                    log.info("행 {}: 카테고리 {} 옵션 가이드가 비어있음 - 옵션 불허", rowNumber, categoryCode);
+                                    result.put("allowedOptionNames", new HashSet<>());
+                                    result.put("requiredOptionNames", new HashSet<>());
+                                    return result;
+                                }
+                            }
+                        }
+                        
+                        // attributes 필드 확인 (대안)
+                        if (data.containsKey("attributes")) {
+                            Object attributes = data.get("attributes");
+                            log.info("행 {}: 카테고리 {} attributes 필드 발견: {}", rowNumber, categoryCode, attributes);
+                            
+                            if (attributes instanceof List) {
+                                @SuppressWarnings("unchecked")
+                                List<Map<String, Object>> attrs = (List<Map<String, Object>>) attributes;
+                                
+                                if (attrs != null && !attrs.isEmpty()) {
+                                    for (Map<String, Object> attr : attrs) {
+                                        Object attributeTypeName = attr.get("attributeTypeName");
+                                        Object required = attr.get("required");
+                                        
+                                        if (attributeTypeName != null) {
+                                            String attrName = String.valueOf(attributeTypeName);
+                                            allowedOptionNames.add(attrName);
+                                            
+                                            // 필수 옵션 확인
+                                            if (required != null) {
+                                                boolean isRequired = "MANDATORY".equals(String.valueOf(required)) ||
+                                                                     "true".equalsIgnoreCase(String.valueOf(required)) ||
+                                                                     (required instanceof Boolean && (Boolean) required);
+                                                if (isRequired) {
+                                                    requiredOptionNames.add(attrName);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (!allowedOptionNames.isEmpty()) {
+                                        log.info("행 {}: 카테고리 {} attributes에서 허용된 옵션명 {}개: {}", 
+                                                rowNumber, categoryCode, allowedOptionNames.size(), allowedOptionNames);
+                                        log.info("행 {}: 카테고리 {} 필수 옵션명 {}개: {}", 
+                                                rowNumber, categoryCode, requiredOptionNames.size(), requiredOptionNames);
+                                        result.put("allowedOptionNames", allowedOptionNames);
+                                        result.put("requiredOptionNames", requiredOptionNames);
+                                        return result;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // useOptionYn 필드 확인 (옵션 사용 가능 여부)
+                        if (data.containsKey("useOptionYn")) {
+                            Object useOptionYn = data.get("useOptionYn");
+                            log.info("행 {}: 카테고리 {} useOptionYn 필드 발견: {}", rowNumber, categoryCode, useOptionYn);
+                            
+                            boolean allowed = false;
+                            if (useOptionYn instanceof Boolean) {
+                                allowed = (Boolean) useOptionYn;
+                            } else if (useOptionYn instanceof String) {
+                                allowed = "Y".equalsIgnoreCase((String) useOptionYn) || 
+                                         "true".equalsIgnoreCase((String) useOptionYn);
+                            }
+                            
+                            if (!allowed) {
+                                log.info("행 {}: 카테고리 {} 옵션 사용 불가 (useOptionYn=false) - 옵션 불허", rowNumber, categoryCode);
+                                result.put("allowedOptionNames", new HashSet<>());
+                                result.put("requiredOptionNames", new HashSet<>());
+                                return result;
+                            }
+                        }
+                        
+                        // 옵션 관련 정보가 없으면 null 반환 (모든 옵션 허용)
+                        log.info("행 {}: 카테고리 {} 옵션 관련 정보 없음 - 모든 옵션 허용", rowNumber, categoryCode);
+                        result.put("allowedOptionNames", null);
+                        result.put("requiredOptionNames", new HashSet<>());
+                        return result;
+                    }
+                } else {
+                    log.warn("행 {}: 카테고리 {} 메타데이터 조회 실패 또는 data 없음 - 모든 옵션 허용", rowNumber, categoryCode);
+                }
+            }
+        } catch (Exception e) {
+            log.error("행 {}: 카테고리 {} 메타데이터 조회 중 오류 발생: {}", rowNumber, categoryCode, e.getMessage(), e);
+        }
+        
+        // 기본값: null 반환 (모든 옵션 허용)
+        log.warn("행 {}: 카테고리 {} 메타데이터 조회 실패, 기본적으로 모든 옵션 허용", rowNumber, categoryCode);
+        result.put("allowedOptionNames", null);
+        result.put("requiredOptionNames", new HashSet<>());
+        return result;
+    }
+    
+    /**
+     * 카테고리에서 허용된 옵션명 목록 조회 (하위 호환성 유지)
+     * 
+     * @deprecated getAllowedOptionNames 대신 getCategoryOptionInfo 사용 권장
+     */
+    @Deprecated
+    private Set<String> getAllowedOptionNames(Long categoryCode, Integer rowNumber) {
+        if (categoryCode == null) {
+            log.debug("행 {}: 카테고리 코드가 없어 모든 옵션 허용", rowNumber);
+            return null; // null이면 모든 옵션 허용
+        }
+        
+        try {
+            log.info("행 {}: 카테고리 {} 메타데이터 조회 시작...", rowNumber, categoryCode);
+            // 카테고리 메타데이터 조회
+            Map<String, Object> metadataResponse = coupangApiClient.getCategoryMetadata(categoryCode).block();
+            
+            if (metadataResponse != null) {
+                Object codeObj = metadataResponse.get("code");
+                boolean isSuccess = "SUCCESS".equals(String.valueOf(codeObj)) || 
+                                  "200".equals(String.valueOf(codeObj)) ||
+                                  (codeObj instanceof Number && ((Number) codeObj).intValue() == 200);
+                
+                log.info("행 {}: 카테고리 {} 메타데이터 조회 결과 - code={}, success={}", 
+                        rowNumber, categoryCode, codeObj, isSuccess);
+                
+                if (isSuccess && metadataResponse.containsKey("data")) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> data = (Map<String, Object>) metadataResponse.get("data");
+                    
+                    if (data != null) {
+                        log.debug("행 {}: 카테고리 {} 메타데이터 data 키들: {}", rowNumber, categoryCode, data.keySet());
+                        
+                        Set<String> allowedNames = new HashSet<>();
+                        
+                        // optionGuides 필드 확인 (옵션 가이드 목록)
+                        if (data.containsKey("optionGuides")) {
+                            Object optionGuides = data.get("optionGuides");
+                            log.info("행 {}: 카테고리 {} optionGuides 필드 발견: {}", rowNumber, categoryCode, optionGuides);
+                            
+                            if (optionGuides instanceof List) {
+                                @SuppressWarnings("unchecked")
+                                List<Map<String, Object>> guides = (List<Map<String, Object>>) optionGuides;
+                                
+                                if (guides != null && !guides.isEmpty()) {
+                                    log.info("행 {}: 카테고리 {} 옵션 가이드 {}개 발견", rowNumber, categoryCode, guides.size());
+                                    
+                                    for (Map<String, Object> guide : guides) {
+                                        Object optionName = guide.get("optionName");
+                                        if (optionName != null) {
+                                            allowedNames.add(String.valueOf(optionName));
+                                            log.debug("행 {}: 허용된 옵션명 추가: {}", rowNumber, optionName);
+                                        }
+                                    }
+                                    
+                                    log.info("행 {}: 카테고리 {} 허용된 옵션명 {}개: {}", 
+                                            rowNumber, categoryCode, allowedNames.size(), allowedNames);
+                                    return allowedNames;
+                                } else {
+                                    log.info("행 {}: 카테고리 {} 옵션 가이드가 비어있음 - 옵션 불허", rowNumber, categoryCode);
+                                    return new HashSet<>(); // 빈 Set이면 옵션 불허
+                                }
+                            }
+                        }
+                        
+                        // attributes 필드 확인 (대안)
+                        if (data.containsKey("attributes")) {
+                            Object attributes = data.get("attributes");
+                            log.info("행 {}: 카테고리 {} attributes 필드 발견: {}", rowNumber, categoryCode, attributes);
+                            
+                            if (attributes instanceof List) {
+                                @SuppressWarnings("unchecked")
+                                List<Map<String, Object>> attrs = (List<Map<String, Object>>) attributes;
+                                
+                                if (attrs != null && !attrs.isEmpty()) {
+                                    for (Map<String, Object> attr : attrs) {
+                                        Object attributeTypeName = attr.get("attributeTypeName");
+                                        if (attributeTypeName != null) {
+                                            allowedNames.add(String.valueOf(attributeTypeName));
+                                        }
+                                    }
+                                    
+                                    if (!allowedNames.isEmpty()) {
+                                        log.info("행 {}: 카테고리 {} attributes에서 허용된 옵션명 {}개: {}", 
+                                                rowNumber, categoryCode, allowedNames.size(), allowedNames);
+                                        return allowedNames;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // useOptionYn 필드 확인 (옵션 사용 가능 여부)
+                        if (data.containsKey("useOptionYn")) {
+                            Object useOptionYn = data.get("useOptionYn");
+                            log.info("행 {}: 카테고리 {} useOptionYn 필드 발견: {}", rowNumber, categoryCode, useOptionYn);
+                            
+                            boolean allowed = false;
+                            if (useOptionYn instanceof Boolean) {
+                                allowed = (Boolean) useOptionYn;
+                            } else if (useOptionYn instanceof String) {
+                                allowed = "Y".equalsIgnoreCase((String) useOptionYn) || 
+                                         "true".equalsIgnoreCase((String) useOptionYn);
+                            }
+                            
+                            if (!allowed) {
+                                log.info("행 {}: 카테고리 {} 옵션 사용 불가 (useOptionYn=false) - 옵션 불허", rowNumber, categoryCode);
+                                return new HashSet<>(); // 빈 Set이면 옵션 불허
+                            }
+                        }
+                        
+                        // 옵션 관련 정보가 없으면 null 반환 (모든 옵션 허용)
+                        log.info("행 {}: 카테고리 {} 옵션 관련 정보 없음 - 모든 옵션 허용", rowNumber, categoryCode);
+                        return null;
+                    }
+                } else {
+                    log.warn("행 {}: 카테고리 {} 메타데이터 조회 실패 또는 data 없음 - 모든 옵션 허용", rowNumber, categoryCode);
+                }
+            }
+        } catch (Exception e) {
+            log.error("행 {}: 카테고리 {} 메타데이터 조회 중 오류 발생: {}", rowNumber, categoryCode, e.getMessage(), e);
+        }
+        
+        // 기본값: null 반환 (모든 옵션 허용)
+        log.warn("행 {}: 카테고리 {} 메타데이터 조회 실패, 기본적으로 모든 옵션 허용", rowNumber, categoryCode);
         return null;
     }
     

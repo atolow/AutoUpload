@@ -1,10 +1,8 @@
 package com.example.auto.platform;
 
-import com.example.auto.dto.GroupProductRequest;
 import com.example.auto.dto.ProductRequest;
 import com.example.auto.dto.ProductSearchRequest;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
