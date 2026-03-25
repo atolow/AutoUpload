@@ -1,7 +1,8 @@
-package com.example.auto.naver.service;
+package com.example.auto.naver.converter;
 
 import com.example.auto.dto.ProductRequest;
 import com.example.auto.naver.constants.NaverApiConstants;
+import com.example.auto.naver.service.NaverCategoryMappingService;
 import com.example.auto.naver.util.NaverStatusConverter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,12 +12,36 @@ import java.math.BigDecimal;
 import java.util.*;
 
 /**
- * 네이버 엑셀 데이터를 ProductRequest로 변환하는 컨버터
+ * CompanyTest 회사의 네이버 엑셀 데이터를 ProductRequest로 변환하는 컨버터
+ * 
+ * 엑셀 컬럼 구조:
+ * - 상품ID(내부용)
+ * - 상품명
+ * - 카테고리
+ * - 판매가
+ * - 재고수량
+ * - 옵션명1, 옵션값1
+ * - 옵션명2, 옵션값2
+ * - 브랜드
+ * - 모델명
+ * - 바코드
+ * - 상세설명
+ * - 대표이미지URL
+ * - 추가이미지URL1
+ * - 배송비
+ * - 배송방법
+ * - 원산지
+ * - 제조사
+ * - 과세구분
+ * - 판매상태
+ * - 전시상태
+ * - guideId
  */
 @Slf4j
-@Component
+@Component("testCompanyNaverExcelConverter")
+@org.springframework.context.annotation.Primary
 @RequiredArgsConstructor
-public class NaverExcelToProductConverter {
+public class TestCompanyNaverExcelConverter implements NaverExcelConverter {
     
     private final NaverCategoryMappingService categoryMappingService;
     
@@ -27,6 +52,7 @@ public class NaverExcelToProductConverter {
      * @return ProductRequest 객체
      * @throws IllegalArgumentException 필수 필드가 없거나 형식이 잘못된 경우
      */
+    @Override
     public ProductRequest convert(Map<String, Object> rowData) {
         if (rowData == null || rowData.isEmpty()) {
             throw new IllegalArgumentException("행 데이터가 비어있습니다.");
@@ -37,7 +63,7 @@ public class NaverExcelToProductConverter {
             rowNumber = 0;
         }
         
-        log.debug("엑셀 행 {} 변환 시작", rowNumber);
+        log.debug("엑셀 행 {} 변환 시작 (CompanyTest)", rowNumber);
         
         ProductRequest.ProductRequestBuilder builder = ProductRequest.builder();
         
@@ -48,26 +74,51 @@ public class NaverExcelToProductConverter {
         }
         builder.name(name.trim());
         
-        // 필수 필드: 카테고리
-        String leafCategoryId = getStringValue(rowData, "카테고리");
-        if (leafCategoryId == null || leafCategoryId.trim().isEmpty()) {
-            throw new IllegalArgumentException(String.format("행 %d: 카테고리는 필수입니다.", rowNumber));
+        // 필수 필드: 카테고리 (카테고리대, 카테고리중, 카테고리소 또는 단일 카테고리 컬럼)
+        String categoryPath = null;
+        
+        // 카테고리대, 카테고리중, 카테고리소가 있는 경우 조합
+        String categoryLarge = getStringValue(rowData, "카테고리대");
+        String categoryMedium = getStringValue(rowData, "카테고리중");
+        String categorySmall = getStringValue(rowData, "카테고리소");
+        
+        if (categoryLarge != null && !categoryLarge.trim().isEmpty()) {
+            // 카테고리대, 카테고리중, 카테고리소로 경로 구성
+            StringBuilder pathBuilder = new StringBuilder();
+            pathBuilder.append(categoryLarge.trim());
+            
+            if (categoryMedium != null && !categoryMedium.trim().isEmpty()) {
+                pathBuilder.append(" > ").append(categoryMedium.trim());
+            }
+            
+            if (categorySmall != null && !categorySmall.trim().isEmpty()) {
+                pathBuilder.append(" > ").append(categorySmall.trim());
+            }
+            
+            categoryPath = pathBuilder.toString();
+        } else {
+            // 기존 방식: 단일 카테고리 컬럼 사용
+            categoryPath = getStringValue(rowData, "카테고리");
         }
         
-        String trimmedCategoryId = leafCategoryId.trim();
+        if (categoryPath == null || categoryPath.trim().isEmpty()) {
+            throw new IllegalArgumentException(String.format("행 %d: 카테고리는 필수입니다. (카테고리대 또는 카테고리 컬럼 필요)", rowNumber));
+        }
+        
+        String trimmedCategoryPath = categoryPath.trim();
         
         // 카테고리 경로 저장 (카테고리별 원산지 정보 처리용)
-        builder.categoryPath(trimmedCategoryId);
+        builder.categoryPath(trimmedCategoryPath);
         
         // 숫자 ID인지 확인
-        if (categoryMappingService.isNumericCategoryId(trimmedCategoryId)) {
+        if (categoryMappingService.isNumericCategoryId(trimmedCategoryPath)) {
             // 이미 숫자 ID이면 그대로 사용
-            builder.leafCategoryId(trimmedCategoryId);
+            builder.leafCategoryId(trimmedCategoryPath);
         } else {
             // 한글 경로인 경우 매핑 서비스를 통해 변환 시도
-            String mappedCategoryId = categoryMappingService.convertToCategoryId(trimmedCategoryId);
+            String mappedCategoryId = categoryMappingService.convertToCategoryId(trimmedCategoryPath);
             if (mappedCategoryId != null) {
-                log.info("행 {}: 카테고리 경로를 ID로 변환: {} -> {}", rowNumber, trimmedCategoryId, mappedCategoryId);
+                log.info("행 {}: 카테고리 경로를 ID로 변환: {} -> {}", rowNumber, trimmedCategoryPath, mappedCategoryId);
                 builder.leafCategoryId(mappedCategoryId);
             } else {
                 // 매핑이 없으면 에러 발생 (잘못된 카테고리 ID로 등록 시도 방지)
@@ -75,7 +126,7 @@ public class NaverExcelToProductConverter {
                         "행 %d: 카테고리 매핑을 찾을 수 없습니다: '%s'. " +
                         "엑셀 파일의 카테고리 컬럼을 숫자 ID로 변경하거나, " +
                         "네이버 스마트스토어에서 확인한 정확한 카테고리 경로를 사용하세요.", 
-                        rowNumber, trimmedCategoryId));
+                        rowNumber, trimmedCategoryPath));
             }
         }
         
@@ -93,10 +144,14 @@ public class NaverExcelToProductConverter {
         }
         builder.stockQuantity(stockQuantity);
         
-        // 필수 필드: 상세설명
-        String detailContent = getStringValue(rowData, "상세설명");
+        // 필수 필드: 상세설명 (상품상세설명 컬럼 사용)
+        String detailContent = getStringValue(rowData, "상품상세설명");
         if (detailContent == null || detailContent.trim().isEmpty()) {
-            throw new IllegalArgumentException(String.format("행 %d: 상세설명은 필수입니다.", rowNumber));
+            // 폴백: "상세설명" 컬럼도 시도
+            detailContent = getStringValue(rowData, "상세설명");
+        }
+        if (detailContent == null || detailContent.trim().isEmpty()) {
+            throw new IllegalArgumentException(String.format("행 %d: 상품상세설명은 필수입니다.", rowNumber));
         }
         builder.detailContent(detailContent.trim());
         
@@ -171,7 +226,7 @@ public class NaverExcelToProductConverter {
         }
         
         ProductRequest request = builder.build();
-        log.debug("엑셀 행 {} 변환 완료: 상품명={}", rowNumber, name);
+        log.debug("엑셀 행 {} 변환 완료 (CompanyTest): 상품명={}", rowNumber, name);
         
         return request;
     }
@@ -342,4 +397,3 @@ public class NaverExcelToProductConverter {
         return null;
     }
 }
-

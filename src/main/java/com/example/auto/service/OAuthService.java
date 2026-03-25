@@ -168,7 +168,7 @@ public class OAuthService {
             log.info("스토어 업데이트 완료: vendorId={}, storeName={}", finalVendorId, finalStoreName);
             return storeService.updateStore(store.getId(), store);
         } else {
-            // 새 스토어 생성
+            // 새 스토어 생성 시도
             Store newStore = Store.builder()
                     .vendorId(finalVendorId)
                     .storeName(finalStoreName)
@@ -178,8 +178,36 @@ public class OAuthService {
                     .isActive(true)
                     .build();
 
-            log.info("스토어 생성 완료: vendorId={}, storeName={}", finalVendorId, finalStoreName);
-            return storeService.createStore(newStore);
+            try {
+                log.info("스토어 생성 시도: vendorId={}, storeName={}", finalVendorId, finalStoreName);
+                return storeService.createStore(newStore);
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                // 중복 키 예외 발생 시 (동시성 문제 등) 기존 스토어를 조회하여 업데이트
+                log.warn("스토어 생성 중 중복 키 예외 발생, 기존 스토어를 업데이트합니다: vendorId={}, error={}", 
+                        finalVendorId, e.getMessage());
+                
+                // 다시 조회 시도 (람다 표현식에서 사용하기 위해 변수 복사)
+                String vendorIdForLambda = finalVendorId;
+                Exception exceptionForLambda = e;
+                Store existingStore = storeService.getStoreByVendorId(finalVendorId)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "스토어 생성 실패 후 조회도 실패했습니다: vendorId=" + vendorIdForLambda, exceptionForLambda));
+                
+                // 기존 스토어 업데이트
+                existingStore.setAccessToken(accessToken);
+                if (refreshToken != null) {
+                    existingStore.setRefreshToken(refreshToken);
+                }
+                if (tokenExpiresAt != null) {
+                    existingStore.setTokenExpiresAt(tokenExpiresAt);
+                }
+                existingStore.setStoreName(finalStoreName);
+                existingStore.setActive(true);
+                
+                log.info("중복 키 예외 처리 후 스토어 업데이트 완료: vendorId={}, storeName={}", 
+                        finalVendorId, finalStoreName);
+                return storeService.updateStore(existingStore.getId(), existingStore);
+            }
         }
     }
 }

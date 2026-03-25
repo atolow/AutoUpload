@@ -727,12 +727,14 @@ public class ProductController {
             @Parameter(description = "엑셀 파일 (.xlsx 또는 .xls)", required = true)
             @RequestParam("file") MultipartFile file,
             @Parameter(description = PlatformConstants.PARAMETER_DESCRIPTION, required = true, example = PlatformConstants.NAVER)
-            @RequestParam("platform") String platform) {
+            @RequestParam("platform") String platform,
+            @Parameter(description = "회사명 (회사별 엑셀 컬럼 구조 구분용, 기본값: TestCompany)", required = false, example = "TestCompany")
+            @RequestParam(value = "company", required = false, defaultValue = "TestCompany") String company) {
         try {
-            log.info("엑셀 파일 업로드 요청: fileName={}, size={}, platform={}", 
-                    file.getOriginalFilename(), file.getSize(), platform);
+            log.info("엑셀 파일 업로드 요청: fileName={}, size={}, platform={}, company={}", 
+                    file.getOriginalFilename(), file.getSize(), platform, company);
             
-            ExcelUploadResult result = productUploadService.uploadProductsFromExcel(file, platform);
+            ExcelUploadResult result = productUploadService.uploadProductsFromExcel(file, platform, company);
             
             return ResponseEntity.ok(result);
             

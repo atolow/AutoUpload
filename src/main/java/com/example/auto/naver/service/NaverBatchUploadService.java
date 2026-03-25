@@ -2,16 +2,20 @@ package com.example.auto.naver.service;
 
 import com.example.auto.dto.ExcelUploadResult;
 import com.example.auto.naver.constants.NaverApiConstants;
+import com.example.auto.naver.converter.NaverExcelConverter;
 import com.example.auto.platform.BatchUploadService;
 import com.example.auto.service.CsvExportService;
 import com.example.auto.service.ExcelService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.BeanFactory;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 네이버 배치 업로드 서비스
@@ -22,21 +26,34 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class NaverBatchUploadService implements BatchUploadService {
     
+    /**
+     * 허용된 회사명 목록
+     * 새로운 회사를 추가하려면 이 Set에 회사명을 추가하고, 해당 회사의 Converter 클래스를 생성해야 합니다.
+     * 예: ExampleCompany를 추가하려면 Set.of("TestCompany", "ExampleCompany")로 변경
+     */
+    private static final Set<String> ALLOWED_COMPANIES = Set.of("TestCompany");
+    
     private final ExcelService excelService;
-    private final NaverExcelToProductConverter excelToProductConverter;
+    // 기본 Converter (TestCompany)
+    private final NaverExcelConverter defaultExcelToProductConverter;
     private final NaverProductService productService;
     private final CsvExportService csvExportService;
+    private final BeanFactory beanFactory;
     
     /**
-     * 엑셀 파일을 읽어서 상품들을 배치로 업로드
+     * 엑셀 파일을 읽어서 상품들을 배치로 업로드 (회사명 지정)
      * 
      * @param storeId 스토어 ID
      * @param excelRows 엑셀 행 데이터 리스트
+     * @param company 회사명 (회사별 엑셀 컬럼 구조 구분용)
      * @return 업로드 결과 리포트
      */
     @Override
-    public ExcelUploadResult batchUploadProducts(Long storeId, List<Map<String, Object>> excelRows) {
-        log.info("배치 업로드 시작: 스토어 ID={}, 총 {}개 행", storeId, excelRows.size());
+    public ExcelUploadResult batchUploadProducts(Long storeId, List<Map<String, Object>> excelRows, String company) {
+        log.info("배치 업로드 시작: 스토어 ID={}, 총 {}개 행, 회사={}", storeId, excelRows.size(), company);
+        
+        // 회사명에 따라 적절한 Converter 선택
+        NaverExcelConverter excelToProductConverter = getExcelConverter(company);
         
         ExcelUploadResult.ExcelUploadResultBuilder resultBuilder = ExcelUploadResult.builder()
                 .totalCount(excelRows.size())
@@ -148,5 +165,41 @@ public class NaverBatchUploadService implements BatchUploadService {
         result.setFailureCsvPath(failureCsvPath);
         
         return result;
+    }
+    
+    /**
+     * 회사명에 따라 적절한 NaverExcelConverter 선택
+     * 빈 이름 규칙: {company}NaverExcelConverter (예: testCompanyNaverExcelConverter)
+     * 
+     * @param company 회사명
+     * @return NaverExcelConverter 구현체
+     * @throws IllegalArgumentException 허용되지 않은 회사명인 경우
+     */
+    private NaverExcelConverter getExcelConverter(String company) {
+        if (company == null || company.trim().isEmpty()) {
+            company = "TestCompany";
+        }
+        company = company.trim();
+        
+        // 회사명 검증
+        if (!ALLOWED_COMPANIES.contains(company)) {
+            throw new IllegalArgumentException(
+                String.format("지원하지 않는 회사명입니다: '%s'. 허용된 회사명: %s", 
+                    company, ALLOWED_COMPANIES));
+        }
+        
+        // 빈 이름 생성: 첫 글자를 소문자로 변환 (예: TestCompany -> testCompanyNaverExcelConverter)
+        String beanName = company.substring(0, 1).toLowerCase() + company.substring(1) + "NaverExcelConverter";
+        
+        try {
+            NaverExcelConverter converter = beanFactory.getBean(beanName, NaverExcelConverter.class);
+            log.info("회사별 Converter 선택: 회사={}, 빈 이름={}", company, beanName);
+            return converter;
+        } catch (NoSuchBeanDefinitionException e) {
+            throw new IllegalArgumentException(
+                String.format("회사 '%s'의 Converter를 찾을 수 없습니다 (빈 이름: %s). " +
+                    "해당 회사의 Converter 클래스를 생성하고 빈으로 등록해주세요.", 
+                    company, beanName), e);
+        }
     }
 }

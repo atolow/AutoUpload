@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -184,6 +185,24 @@ public class CoupangCategoryMappingService {
         
         String trimmedPath = categoryPath.trim();
         
+        // 디버깅: 검색 키워드가 포함된 카테고리 경로 찾기
+        if (log.isDebugEnabled()) {
+            String[] keywords = trimmedPath.split("[>]");
+            if (keywords.length > 0) {
+                String lastKeyword = keywords[keywords.length - 1].trim();
+                log.debug("검색 키워드: '{}'", lastKeyword);
+                int matchCount = 0;
+                for (Map.Entry<String, String> entry : categoryMappingCache.entrySet()) {
+                    if (entry.getKey().contains(lastKeyword)) {
+                        if (matchCount++ < 5) {
+                            log.debug("  후보: {} -> {}", entry.getKey(), entry.getValue());
+                        }
+                    }
+                }
+                log.debug("총 {}개 카테고리가 '{}' 키워드를 포함함", matchCount, lastKeyword);
+            }
+        }
+        
         // 정확한 매칭 시도
         String categoryCode = categoryMappingCache.get(trimmedPath);
         if (categoryCode != null) {
@@ -217,29 +236,254 @@ public class CoupangCategoryMappingService {
             }
         }
         
-        // 유사한 경로 찾기 (마지막 부분만 일치하는 경우)
+        // 경로 단계별 순차 매칭 (정확한 매핑을 위한 개선된 로직)
         String[] searchParts = trimmedPath.split("[>]");
         if (searchParts.length > 0) {
-            String lastPart = searchParts[searchParts.length - 1].trim();
+            // 각 부분 정리
+            for (int i = 0; i < searchParts.length; i++) {
+                searchParts[i] = searchParts[i].trim();
+            }
             
-            // 마지막 부분이 정확히 일치하는 경로 찾기
+            String lastPart = searchParts[searchParts.length - 1];
+            String firstPart = searchParts[0];
+            
+            log.info("카테고리 매핑 시도: 전체 경로='{}', 경로 단계={}개", trimmedPath, searchParts.length);
+            for (int i = 0; i < searchParts.length; i++) {
+                log.debug("  검색 경로[{}]: '{}'", i, searchParts[i]);
+            }
+            
+            // 상위 카테고리 매핑 테이블 (엑셀 경로 -> 쿠팡 API 경로)
+            Map<String, String[]> topCategoryMapping = new HashMap<>();
+            topCategoryMapping.put("의류", new String[]{"패션의류잡화", "패션의류"});
+            topCategoryMapping.put("신발", new String[]{"패션의류잡화", "패션"});
+            topCategoryMapping.put("식품", new String[]{"식품"});
+            topCategoryMapping.put("가전", new String[]{"가전/디지털"});
+            
+            // 엑셀 경로에 제외 키워드가 있는지 확인
+            String[] excludeKeywords = {"반려", "애완", "베이비", "영유아", "유아", "아동", "키즈", "주니어"};
+            boolean searchPathHasExcludeKeyword = false;
+            for (String keyword : excludeKeywords) {
+                for (String part : searchParts) {
+                    if (part.contains(keyword)) {
+                        searchPathHasExcludeKeyword = true;
+                        log.debug("엑셀 경로에 제외 키워드 발견: '{}' (키워드: '{}')", part, keyword);
+                        break;
+                    }
+                }
+                if (searchPathHasExcludeKeyword) break;
+            }
+            
+            // 1단계: 마지막 부분이 일치하고, 경로의 각 단계가 순차적으로 매칭되는 카테고리 찾기
+            List<Map.Entry<String, String>> candidateEntries = new ArrayList<>();
+            
             for (Map.Entry<String, String> entry : categoryMappingCache.entrySet()) {
                 String entryKey = entry.getKey();
                 String[] entryParts = entryKey.split("[>]");
                 
-                if (entryParts.length > 0) {
-                    String entryLastPart = entryParts[entryParts.length - 1].trim();
+                // 각 부분 정리
+                for (int i = 0; i < entryParts.length; i++) {
+                    entryParts[i] = entryParts[i].trim();
+                }
+                
+                if (entryParts.length == 0) {
+                    continue;
+                }
+                
+                String entryFirstPart = entryParts[0];
+                String entryLastPart = entryParts[entryParts.length - 1];
+                
+                // ROOT로 시작하는 경로는 ROOT를 제외하고 비교
+                int entryStartIdx = "ROOT".equals(entryFirstPart) ? 1 : 0;
+                int entryEndIdx = entryParts.length - 1;
+                
+                // 마지막 부분이 일치해야 함
+                if (!entryLastPart.equals(lastPart)) {
+                    continue;
+                }
+                
+                // 경로 단계별 순차 매칭
+                // 엑셀: "의류 > 상의 > 후드티" (3단계)
+                // 쿠팡: "ROOT > 패션의류잡화 > 남성패션 > 남성의류 > 상의 > 후드티" (6단계)
+                // → 엑셀의 각 단계가 쿠팡 경로의 어딘가에 순서대로 나타나야 함
+                
+                int searchIdx = 0; // 엑셀 경로 인덱스
+                int entryIdx = entryStartIdx; // 쿠팡 경로 인덱스
+                boolean allMatched = true;
+                
+                while (searchIdx < searchParts.length && entryIdx <= entryEndIdx) {
+                    String searchPart = searchParts[searchIdx];
+                    boolean matched = false;
                     
-                    if (entryLastPart.equals(lastPart)) {
-                        log.info("카테고리 매핑 성공 (마지막 부분 일치): '{}' -> '{}' (코드: {})", 
-                                trimmedPath, entryKey, entry.getValue());
-                        return entry.getValue();
+                    // 첫 번째 단계(상위 카테고리)인 경우 특별 처리
+                    if (searchIdx == 0 && topCategoryMapping.containsKey(searchPart)) {
+                        // 상위 카테고리 매핑 테이블에 있는 경우, 매핑된 카테고리가 포함된 경로만 매칭
+                        String[] mappedCategories = topCategoryMapping.get(searchPart);
+                        
+                        for (int i = entryIdx; i <= entryEndIdx; i++) {
+                            String entryPart = entryParts[i];
+                            
+                            // 엑셀 경로에 제외 키워드가 없을 때만 쿠팡 경로의 제외 키워드를 필터링
+                            if (!searchPathHasExcludeKeyword) {
+                                boolean hasExcludeKeyword = false;
+                                for (String keyword : excludeKeywords) {
+                                    if (entryPart.contains(keyword)) {
+                                        hasExcludeKeyword = true;
+                                        break;
+                                    }
+                                }
+                                if (hasExcludeKeyword) {
+                                    continue; // 제외 키워드가 포함된 경로는 스킵
+                                }
+                            }
+                            
+                            // 매핑된 카테고리와 매칭 확인
+                            for (String mapped : mappedCategories) {
+                                if (entryPart.contains(mapped) || mapped.contains(entryPart) || entryPart.equals(mapped)) {
+                                    matched = true;
+                                    entryIdx = i + 1;
+                                    break;
+                                }
+                            }
+                            if (matched) break;
+                        }
+                    } else {
+                        // 중간/마지막 단계는 일반 매칭
+                        // 정확히 일치하는 것을 우선 찾기
+                        boolean exactMatch = false;
+                        for (int i = entryIdx; i <= entryEndIdx; i++) {
+                            String entryPart = entryParts[i];
+                            if (entryPart.equals(searchPart)) {
+                                matched = true;
+                                exactMatch = true;
+                                entryIdx = i + 1;
+                                break;
+                            }
+                        }
+                        
+                        // 정확히 일치하지 않으면 포함 관계 확인
+                        if (!exactMatch) {
+                            for (int i = entryIdx; i <= entryEndIdx; i++) {
+                                String entryPart = entryParts[i];
+                                // 포함 관계 (예: "상의"와 "남성의류 > 상의")
+                                // 단, 마지막 단계가 아니고, 포함 관계가 너무 넓지 않은 경우만
+                                if (entryPart.contains(searchPart) || searchPart.contains(entryPart)) {
+                                    // 엑셀 경로에 제외 키워드가 없을 때만 쿠팡 경로의 제외 키워드를 필터링
+                                    if (!searchPathHasExcludeKeyword) {
+                                        boolean hasExcludeKeyword = false;
+                                        for (String keyword : excludeKeywords) {
+                                            if (entryPart.contains(keyword)) {
+                                                hasExcludeKeyword = true;
+                                                break;
+                                            }
+                                        }
+                                        if (hasExcludeKeyword) {
+                                            continue; // 제외 키워드가 포함된 경로는 스킵
+                                        }
+                                    }
+                                    matched = true;
+                                    entryIdx = i + 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!matched) {
+                        allMatched = false;
+                        break;
+                    }
+                    
+                    searchIdx++;
+                }
+                
+                // 모든 단계가 순차적으로 매칭되었고, 마지막 부분도 일치하는 경우
+                if (allMatched && searchIdx == searchParts.length) {
+                    // 엑셀 경로에 제외 키워드가 없을 때만 쿠팡 경로의 제외 키워드를 필터링
+                    // 엑셀 경로에 제외 키워드가 있으면 해당 카테고리를 판매하는 것이므로 매칭 허용
+                    boolean shouldExclude = false;
+                    if (!searchPathHasExcludeKeyword) {
+                        // 엑셀 경로에 제외 키워드가 없으면, 쿠팡 경로에 제외 키워드가 있으면 제외
+                        for (String keyword : excludeKeywords) {
+                            if (entryKey.contains(keyword)) {
+                                shouldExclude = true;
+                                log.debug("순차 매칭 후보 제외 (엑셀 경로에 제외 키워드 없음, 쿠팡 경로에 제외 키워드 포함): '{}'", entryKey);
+                                break;
+                            }
+                        }
+                    }
+                    // 엑셀 경로에 제외 키워드가 있으면 쿠팡 경로의 제외 키워드와 관계없이 매칭 허용
+                    
+                    if (!shouldExclude) {
+                        log.debug("순차 매칭 후보 발견: '{}' -> '{}' (코드: {})", trimmedPath, entryKey, entry.getValue());
+                        candidateEntries.add(entry);
                     }
                 }
             }
+            
+            log.debug("순차 매칭 후보: {}개", candidateEntries.size());
+            
+            // 후보 중에서 가장 적합한 것 선택 (경로 길이와 일치도 고려)
+            if (!candidateEntries.isEmpty()) {
+                Map.Entry<String, String> bestMatch = null;
+                int bestScore = 0;
+                
+                for (Map.Entry<String, String> entry : candidateEntries) {
+                    String entryKey = entry.getKey();
+                    String[] entryParts = entryKey.split("[>]");
+                    int score = 0;
+                    
+                    // 경로 길이가 비슷할수록 높은 점수
+                    int lengthDiff = Math.abs(entryParts.length - searchParts.length);
+                    if (lengthDiff == 0) {
+                        score += 20;
+                    } else if (lengthDiff <= 2) {
+                        score += 10;
+                    } else if (lengthDiff <= 3) {
+                        score += 5;
+                    }
+                    
+                    // 중간 경로의 정확한 일치도
+                    int matchedParts = 0;
+                    int entryStartIdx = entryParts[0].trim().equals("ROOT") ? 1 : 0;
+                    int searchIdx = 0;
+                    int entryIdx = entryStartIdx;
+                    
+                    while (searchIdx < searchParts.length && entryIdx < entryParts.length) {
+                        String searchPart = searchParts[searchIdx].trim();
+                        String entryPart = entryParts[entryIdx].trim();
+                        
+                        if (entryPart.equals(searchPart)) {
+                            score += 10;
+                            matchedParts++;
+                            searchIdx++;
+                            entryIdx++;
+                        } else if (entryPart.contains(searchPart) || searchPart.contains(entryPart)) {
+                            score += 5;
+                            matchedParts++;
+                            searchIdx++;
+                            entryIdx++;
+                        } else {
+                            entryIdx++;
+                        }
+                    }
+                    
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestMatch = entry;
+                    }
+                }
+                
+                if (bestMatch != null) {
+                    log.info("카테고리 매핑 성공 (순차 경로 매칭): '{}' -> '{}' (코드: {}, 점수: {})", 
+                            trimmedPath, bestMatch.getKey(), bestMatch.getValue(), bestScore);
+                    return bestMatch.getValue();
+                }
+            }
+            
+            log.debug("순차 경로 매칭 실패, 추천 API 사용 권장: '{}'", trimmedPath);
         }
         
-        log.warn("카테고리 매핑 실패: '{}'에 해당하는 카테고리 코드를 찾을 수 없습니다.", trimmedPath);
+        log.warn("카테고리 매핑 실패: '{}'에 해당하는 카테고리 코드를 찾을 수 없습니다. 추천 API를 사용합니다.", trimmedPath);
         return null;
     }
     

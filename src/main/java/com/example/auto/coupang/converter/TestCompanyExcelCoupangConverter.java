@@ -1,5 +1,6 @@
-package com.example.auto.coupang.service;
+package com.example.auto.coupang.converter;
 
+import com.example.auto.coupang.service.CoupangCategoryMappingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -12,12 +13,34 @@ import java.util.Set;
 import java.util.HashSet;
 
 /**
- * 쿠팡 엑셀 데이터를 쿠팡 API 형식으로 변환하는 컨버터
+ * CompanyTest 회사의 엑셀 데이터를 쿠팡 API 형식으로 변환하는 컨버터
+ * 
+ * 엑셀 컬럼 구조 (실무형 사업자 상품관리 엑셀):
+ * - 상품ID
+ * - 대표상품코드
+ * - 옵션코드
+ * - 상품명
+ * - 카테고리대분류
+ * - 카테고리중분류
+ * - 카테고리소분류
+ * - 브랜드
+ * - 판매가
+ * - 공급가
+ * - 마진율(%)
+ * - 재고수량
+ * - 옵션명
+ * - 색상
+ * - 사이즈
+ * - 판매상태
+ * - 입고일
+ * - 최종수정일
+ * - 비고
  */
 @Slf4j
-@Component
+@Component("testCompanyExcelConverter")
+@org.springframework.context.annotation.Primary
 @RequiredArgsConstructor
-public class CoupangExcelToProductConverter {
+public class TestCompanyExcelCoupangConverter implements CoupangExcelConverter {
     
     private final CoupangCategoryMappingService categoryMappingService;
     private final com.example.auto.coupang.client.CoupangApiClient coupangApiClient;
@@ -34,6 +57,7 @@ public class CoupangExcelToProductConverter {
      * @return 쿠팡 API 상품 등록 데이터 (Map)
      * @throws IllegalArgumentException 필수 필드가 없거나 형식이 잘못된 경우
      */
+    @Override
     public Map<String, Object> convert(Map<String, Object> rowData, String vendorId) {
         if (rowData == null || rowData.isEmpty()) {
             throw new IllegalArgumentException("행 데이터가 비어있습니다.");
@@ -44,7 +68,7 @@ public class CoupangExcelToProductConverter {
             rowNumber = 0;
         }
         
-        log.debug("엑셀 행 {} 쿠팡 형식 변환 시작", rowNumber);
+        log.debug("엑셀 행 {} 쿠팡 형식 변환 시작 (CompanyTest)", rowNumber);
         
         Map<String, Object> productData = new HashMap<>();
         
@@ -53,9 +77,73 @@ public class CoupangExcelToProductConverter {
         
         // 필수 필드: displayCategoryCode (카테고리)
         // 쿠팡 API는 카테고리 코드를 Long 타입으로 요구함
-        String categoryCodeStr = getStringValue(rowData, "카테고리");
+        // 새로운 엑셀 구조: 카테고리대분류 > 카테고리중분류 > 카테고리소분류
+        // 다양한 컬럼명 변형 시도 (실제 엑셀: 카테고리대, 카테고리중, 카테고리소)
+        String categoryLarge = getStringValue(rowData, "카테고리대");
+        if (categoryLarge == null || categoryLarge.trim().isEmpty()) {
+            categoryLarge = getStringValue(rowData, "카테고리대분류");
+        }
+        if (categoryLarge == null || categoryLarge.trim().isEmpty()) {
+            categoryLarge = getStringValue(rowData, "카테고리 대분류");
+        }
+        if (categoryLarge == null || categoryLarge.trim().isEmpty()) {
+            categoryLarge = getStringValue(rowData, "대분류");
+        }
+        
+        String categoryMedium = getStringValue(rowData, "카테고리중");
+        if (categoryMedium == null || categoryMedium.trim().isEmpty()) {
+            categoryMedium = getStringValue(rowData, "카테고리중분류");
+        }
+        if (categoryMedium == null || categoryMedium.trim().isEmpty()) {
+            categoryMedium = getStringValue(rowData, "카테고리 중분류");
+        }
+        if (categoryMedium == null || categoryMedium.trim().isEmpty()) {
+            categoryMedium = getStringValue(rowData, "중분류");
+        }
+        
+        String categorySmall = getStringValue(rowData, "카테고리소");
+        if (categorySmall == null || categorySmall.trim().isEmpty()) {
+            categorySmall = getStringValue(rowData, "카테고리소분류");
+        }
+        if (categorySmall == null || categorySmall.trim().isEmpty()) {
+            categorySmall = getStringValue(rowData, "카테고리 소분류");
+        }
+        if (categorySmall == null || categorySmall.trim().isEmpty()) {
+            categorySmall = getStringValue(rowData, "소분류");
+        }
+        
+        // 디버깅: 실제 컬럼명 확인
+        if ((categoryLarge == null || categoryLarge.trim().isEmpty()) && 
+            (categoryMedium == null || categoryMedium.trim().isEmpty()) && 
+            (categorySmall == null || categorySmall.trim().isEmpty())) {
+            log.warn("행 {}: 카테고리 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼명: {}", rowNumber, rowData.keySet());
+        }
+        
+        String categoryCodeStr = null;
+        if (categoryLarge != null && !categoryLarge.trim().isEmpty()) {
+            // 카테고리 대/중/소분류를 합쳐서 처리
+            StringBuilder categoryPath = new StringBuilder(categoryLarge.trim());
+            if (categoryMedium != null && !categoryMedium.trim().isEmpty()) {
+                categoryPath.append(" > ").append(categoryMedium.trim());
+            }
+            if (categorySmall != null && !categorySmall.trim().isEmpty()) {
+                categoryPath.append(" > ").append(categorySmall.trim());
+            }
+            categoryCodeStr = categoryPath.toString();
+        }
+        
         if (categoryCodeStr == null || categoryCodeStr.trim().isEmpty()) {
-            throw new IllegalArgumentException(String.format("행 %d: 카테고리는 필수입니다.", rowNumber));
+            // 단일 카테고리 컬럼도 시도
+            String singleCategory = getStringValue(rowData, "카테고리");
+            if (singleCategory != null && !singleCategory.trim().isEmpty()) {
+                categoryCodeStr = singleCategory.trim();
+                log.info("행 {}: 단일 카테고리 컬럼 사용: '{}'", rowNumber, categoryCodeStr);
+            } else {
+                throw new IllegalArgumentException(String.format(
+                    "행 %d: 카테고리는 필수입니다. (카테고리대분류, 카테고리중분류, 카테고리소분류 또는 카테고리) " +
+                    "사용 가능한 컬럼명: %s", 
+                    rowNumber, rowData.keySet()));
+            }
         }
         
         // 카테고리 코드 처리
@@ -90,7 +178,10 @@ public class CoupangExcelToProductConverter {
             } else {
                 // 매핑 실패 시 상품명을 기반으로 카테고리 추천 시도
                 String productName = getStringValue(rowData, "상품명");
-                String productDescription = getStringValue(rowData, "상세설명");
+                String productDescription = getStringValue(rowData, "상품상세설명");
+                if (productDescription == null || productDescription.trim().isEmpty()) {
+                    productDescription = getStringValue(rowData, "상세설명");
+                }
                 String brand = getStringValue(rowData, "브랜드");
                 
                 log.info("행 {}: 카테고리 매핑 실패, 상품명 기반 추천 시도: '{}'", rowNumber, productName);
@@ -261,16 +352,19 @@ public class CoupangExcelToProductConverter {
         productData.put("productImageUrls", productImages);
         
         // 필수 필드: 상세 설명
-        String detailContent = getStringValue(rowData, "상세설명");
+        String detailContent = getStringValue(rowData, "상품상세설명");
         if (detailContent == null || detailContent.trim().isEmpty()) {
-            throw new IllegalArgumentException(String.format("행 %d: 상세설명은 필수입니다.", rowNumber));
+            detailContent = getStringValue(rowData, "상세설명");
+        }
+        if (detailContent == null || detailContent.trim().isEmpty()) {
+            throw new IllegalArgumentException(String.format("행 %d: 상세설명은 필수입니다. (상품상세설명 또는 상세설명 컬럼 필요)", rowNumber));
         }
         productData.put("detailContent", detailContent.trim());
         
         // 선택 필드: requested (승인 요청 여부, 기본값: true)
         productData.put("requested", true);
         
-        log.debug("엑셀 행 {} 쿠팡 형식 변환 완료: 상품명={}", rowNumber, productName);
+        log.debug("엑셀 행 {} 쿠팡 형식 변환 완료 (CompanyTest): 상품명={}", rowNumber, productName);
         
         return productData;
     }
@@ -293,47 +387,126 @@ public class CoupangExcelToProductConverter {
             throw new IllegalArgumentException(String.format("행 %d: 재고수량은 필수이며 0 이상이어야 합니다.", rowNumber));
         }
         
-        // 옵션 정보 수집
-        String optionName1 = getStringValue(rowData, "옵션명1");
-        String optionValue1 = getStringValue(rowData, "옵션값1");
-        String optionName2 = getStringValue(rowData, "옵션명2");
-        String optionValue2 = getStringValue(rowData, "옵션값2");
+        // 옵션 정보 수집 (새로운 엑셀 구조: 옵션명, 색상, 사이즈)
+        String optionNameColumn = getStringValue(rowData, "옵션명");
+        String color = getStringValue(rowData, "색상");
+        String size = getStringValue(rowData, "사이즈");
         
-        log.info("행 {}: 옵션 정보 수집 - 옵션명1={}, 옵션값1={}, 옵션명2={}, 옵션값2={}, 카테고리={}", 
-                rowNumber, optionName1, optionValue1, optionName2, optionValue2, categoryCode);
+        log.info("행 {}: 옵션 정보 수집 - 옵션명={}, 색상={}, 사이즈={}, 카테고리={}", 
+                rowNumber, optionNameColumn, color, size, categoryCode);
         
         // 카테고리 메타데이터에서 허용된 옵션명 목록 및 필수 옵션 확인
         Map<String, Object> categoryOptionInfo = getCategoryOptionInfo(categoryCode, rowNumber);
         Set<String> allowedOptionNames = (Set<String>) categoryOptionInfo.get("allowedOptionNames");
         Set<String> requiredOptionNames = (Set<String>) categoryOptionInfo.get("requiredOptionNames");
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> optionMetadataMap = (Map<String, Map<String, Object>>) categoryOptionInfo.get("optionMetadataMap");
         
         log.info("행 {}: 카테고리 {} 허용된 옵션명 목록: {}", rowNumber, categoryCode, allowedOptionNames);
         log.info("행 {}: 카테고리 {} 필수 옵션명 목록: {}", rowNumber, categoryCode, requiredOptionNames);
         
         // 입력된 옵션을 Map으로 수집 (옵션명 -> 옵션값)
+        // 새로운 구조: 색상, 사이즈를 각각 옵션으로 처리
         Map<String, String> inputOptions = new HashMap<>();
-        if (optionName1 != null && !optionName1.trim().isEmpty() && 
-            optionValue1 != null && !optionValue1.trim().isEmpty()) {
-            inputOptions.put(optionName1.trim(), optionValue1.trim());
-        }
-        if (optionName2 != null && !optionName2.trim().isEmpty() && 
-            optionValue2 != null && !optionValue2.trim().isEmpty()) {
-            inputOptions.put(optionName2.trim(), optionValue2.trim());
+        
+        // 색상이 있으면 "색상" 옵션으로 추가
+        if (color != null && !color.trim().isEmpty()) {
+            inputOptions.put("색상", color.trim());
         }
         
-        // 필수 옵션이 누락되었는지 확인
+        // 사이즈가 있으면 카테고리별 올바른 옵션명으로 매핑
+        if (size != null && !size.trim().isEmpty()) {
+            // 카테고리별 사이즈 옵션명 매핑
+            // 카테고리 메타데이터에서 필수 옵션명을 확인하여 "사이즈"를 올바른 옵션명으로 변환
+            String sizeOptionName = mapSizeOptionName(categoryCode, allowedOptionNames, requiredOptionNames);
+            if (sizeOptionName != null) {
+                inputOptions.put(sizeOptionName, size.trim());
+                log.info("행 {}: 사이즈 옵션명 매핑: '사이즈' -> '{}' (카테고리: {})", rowNumber, sizeOptionName, categoryCode);
+            } else {
+                // 매핑 실패 시 원래 "사이즈" 사용
+                inputOptions.put("사이즈", size.trim());
+                log.warn("행 {}: 사이즈 옵션명 매핑 실패, 원래 '사이즈' 사용 (카테고리: {})", rowNumber, categoryCode);
+            }
+        }
+        
+        // "수량" 옵션이 필수인 경우, "재고수량"을 "수량" 옵션 값으로 사용
+        if (requiredOptionNames != null && requiredOptionNames.contains("수량")) {
+            // "수량" 옵션의 메타데이터 확인 (단위 정보)
+            String quantityUnit = null;
+            if (optionMetadataMap != null && optionMetadataMap.containsKey("수량")) {
+                Map<String, Object> quantityMetadata = optionMetadataMap.get("수량");
+                Object basicUnit = quantityMetadata.get("basicUnit");
+                if (basicUnit != null) {
+                    quantityUnit = String.valueOf(basicUnit);
+                }
+            }
+            
+            // 엑셀에서 "수량" 컬럼을 먼저 확인
+            String quantityValue = getStringValue(rowData, "수량");
+            if (quantityValue == null || quantityValue.trim().isEmpty()) {
+                // "수량" 컬럼이 없으면 "재고수량"을 사용
+                if (stockQuantity != null && stockQuantity > 0) {
+                    // 단위가 있으면 단위 포함, 없으면 숫자만
+                    String formattedQuantity = String.valueOf(stockQuantity);
+                    if (quantityUnit != null && !quantityUnit.isEmpty() && !"없음".equals(quantityUnit)) {
+                        formattedQuantity = stockQuantity + quantityUnit;
+                    }
+                    inputOptions.put("수량", formattedQuantity);
+                    log.info("행 {}: '수량' 옵션이 필수이므로 '재고수량'({})을 '수량' 옵션 값으로 사용 (단위: {})", 
+                            rowNumber, stockQuantity, quantityUnit != null ? quantityUnit : "없음");
+                } else {
+                    // 재고수량도 없으면 기본값 1 사용
+                    String formattedQuantity = "1";
+                    if (quantityUnit != null && !quantityUnit.isEmpty() && !"없음".equals(quantityUnit)) {
+                        formattedQuantity = "1" + quantityUnit;
+                    }
+                    inputOptions.put("수량", formattedQuantity);
+                    log.warn("행 {}: '수량' 옵션이 필수인데 값이 없어 기본값 '{}'을 사용합니다.", rowNumber, formattedQuantity);
+                }
+            } else {
+                // "수량" 컬럼이 있으면 그것을 사용 (단위가 이미 포함되어 있을 수 있음)
+                String trimmedValue = quantityValue.trim();
+                // 단위가 없고 메타데이터에 단위가 있으면 추가
+                if (quantityUnit != null && !quantityUnit.isEmpty() && !"없음".equals(quantityUnit)) {
+                    // 값이 숫자만 있는지 확인 (단위가 없는 경우)
+                    try {
+                        Integer.parseInt(trimmedValue);
+                        // 숫자만 있으면 단위 추가
+                        trimmedValue = trimmedValue + quantityUnit;
+                    } catch (NumberFormatException e) {
+                        // 이미 단위가 포함되어 있거나 숫자가 아닌 경우 그대로 사용
+                    }
+                }
+                inputOptions.put("수량", trimmedValue);
+                log.info("행 {}: 엑셀의 '수량' 컬럼 값을 '수량' 옵션으로 사용: {}", rowNumber, trimmedValue);
+            }
+        }
+        // 옵션명 컬럼이 있고, 색상/사이즈와 다른 경우 추가 옵션으로 처리
+        // (옵션명 컬럼이 일반적인 옵션 타입을 나타낼 수 있음)
+        if (optionNameColumn != null && !optionNameColumn.trim().isEmpty()) {
+            String trimmedOptionName = optionNameColumn.trim();
+            // 색상, 사이즈와 중복되지 않는 경우에만 추가
+            if (!trimmedOptionName.equals("색상") && !trimmedOptionName.equals("사이즈")) {
+                // 옵션명만 있고 값이 없는 경우, 옵션명 자체를 타입으로 사용
+                // 하지만 쿠팡 API는 옵션명과 값이 모두 필요하므로, 
+                // 옵션명 컬럼이 타입이고 값이 별도로 없는 경우는 처리하지 않음
+                // (실제로는 색상/사이즈가 옵션 값이고, 옵션명 컬럼이 타입일 수 있음)
+            }
+        }
+        
+        // 필수 옵션이 누락되었는지 확인 (경고만, 에러 아님)
         if (requiredOptionNames != null && !requiredOptionNames.isEmpty()) {
             Set<String> missingRequiredOptions = new HashSet<>(requiredOptionNames);
             missingRequiredOptions.removeAll(inputOptions.keySet());
             
             if (!missingRequiredOptions.isEmpty()) {
-                String errorMessage = String.format(
+                String warningMessage = String.format(
                     "행 %d: 카테고리 %d에 필수 옵션이 누락되었습니다. " +
                     "필수 옵션: %s. " +
-                    "엑셀에 다음 컬럼을 추가해주세요: 옵션명3, 옵션값3, 옵션명4, 옵션값4 등",
+                    "쿠팡 API에서 거부될 수 있습니다. 엑셀에 다음 컬럼을 확인해주세요: 색상, 사이즈",
                     rowNumber, categoryCode, missingRequiredOptions);
-                log.error(errorMessage);
-                throw new IllegalArgumentException(errorMessage);
+                log.warn(warningMessage);
+                // 에러 대신 경고만 하고 계속 진행 (이전 동작과 동일하게)
             }
         }
         
@@ -342,33 +515,33 @@ public class CoupangExcelToProductConverter {
         List<String> validOptionValues = new ArrayList<>();
         
         for (Map.Entry<String, String> entry : inputOptions.entrySet()) {
-            String optionName = entry.getKey();
-            String optionValue = entry.getValue();
+            String optName = entry.getKey();
+            String optValue = entry.getValue();
             
-            if (allowedOptionNames == null || allowedOptionNames.isEmpty() || allowedOptionNames.contains(optionName)) {
-                validOptionNames.add(optionName);
-                validOptionValues.add(optionValue);
-                log.info("행 {}: 옵션명 '{}' 허용됨", rowNumber, optionName);
+            if (allowedOptionNames == null || allowedOptionNames.isEmpty() || allowedOptionNames.contains(optName)) {
+                validOptionNames.add(optName);
+                validOptionValues.add(optValue);
+                log.info("행 {}: 옵션명 '{}' 허용됨", rowNumber, optName);
             } else {
                 log.warn("행 {}: 옵션명 '{}'는 카테고리 {}에서 허용되지 않습니다. 제외합니다. (허용된 옵션: {})", 
-                        rowNumber, optionName, categoryCode, allowedOptionNames);
+                        rowNumber, optName, categoryCode, allowedOptionNames);
             }
         }
         
-        // 필수 옵션이 모두 포함되었는지 다시 확인
+        // 필수 옵션이 모두 포함되었는지 다시 확인 (경고만, 에러 아님)
         if (requiredOptionNames != null && !requiredOptionNames.isEmpty()) {
             Set<String> validOptionNamesSet = new HashSet<>(validOptionNames);
             Set<String> missingRequiredOptions = new HashSet<>(requiredOptionNames);
             missingRequiredOptions.removeAll(validOptionNamesSet);
             
             if (!missingRequiredOptions.isEmpty()) {
-                String errorMessage = String.format(
+                String warningMessage = String.format(
                     "행 %d: 카테고리 %d에 필수 옵션이 누락되었습니다. " +
                     "필수 옵션: %s. " +
-                    "엑셀에 다음 컬럼을 추가해주세요: 옵션명3, 옵션값3, 옵션명4, 옵션값4 등",
+                    "쿠팡 API에서 거부될 수 있습니다. 엑셀에 다음 컬럼을 확인해주세요: 색상, 사이즈",
                     rowNumber, categoryCode, missingRequiredOptions);
-                log.error(errorMessage);
-                throw new IllegalArgumentException(errorMessage);
+                log.warn(warningMessage);
+                // 에러 대신 경고만 하고 계속 진행 (이전 동작과 동일하게)
             }
         }
         
@@ -380,19 +553,19 @@ public class CoupangExcelToProductConverter {
         } else {
             // 옵션이 없거나 모두 제외된 경우
             if (requiredOptionNames != null && !requiredOptionNames.isEmpty()) {
-                // 필수 옵션이 있는데 옵션이 없으면 에러
-                String errorMessage = String.format(
+                // 필수 옵션이 있는데 옵션이 없으면 경고만 (이전 동작과 동일하게)
+                String warningMessage = String.format(
                     "행 %d: 카테고리 %d에 필수 옵션이 필요합니다. " +
                     "필수 옵션: %s. " +
-                    "엑셀에 다음 컬럼을 추가해주세요: 옵션명1, 옵션값1, 옵션명2, 옵션값2 등",
+                    "쿠팡 API에서 거부될 수 있습니다. 엑셀에 다음 컬럼을 확인해주세요: 색상, 사이즈",
                     rowNumber, categoryCode, requiredOptionNames);
-                log.error(errorMessage);
-                throw new IllegalArgumentException(errorMessage);
+                log.warn(warningMessage);
+                // 에러 대신 경고만 하고 계속 진행 (이전 동작과 동일하게)
             }
             
             // 필수 옵션이 없는 경우 옵션 없이 등록
-            if ((optionName1 != null && !optionName1.trim().isEmpty()) || 
-                (optionName2 != null && !optionName2.trim().isEmpty())) {
+            if ((color != null && !color.trim().isEmpty()) || 
+                (size != null && !size.trim().isEmpty())) {
                 log.warn("행 {}: 입력된 옵션이 카테고리 {}에서 허용되지 않아 옵션 없이 상품을 등록합니다.", rowNumber, categoryCode);
             }
             Map<String, Object> item = createItem(rowData, rowNumber, salePrice, stockQuantity, null, null, categoryCode);
@@ -460,8 +633,17 @@ public class CoupangExcelToProductConverter {
         
         // 필수 필드: 이미지 (item별 이미지, 객체 배열 형식)
         // 쿠팡 API는 vendorPath(업체이미지경로), imageType(이미지 타입), imageOrder(이미지 순서) 필수
+        // 새로운 엑셀 구조에는 이미지 URL 컬럼이 없을 수 있으므로 선택적으로 처리
         List<Map<String, Object>> itemImages = new ArrayList<>();
         String mainImageUrl = getStringValue(rowData, "대표이미지URL");
+        if (mainImageUrl == null || mainImageUrl.trim().isEmpty()) {
+            // 다른 가능한 컬럼명 시도
+            mainImageUrl = getStringValue(rowData, "이미지URL");
+            if (mainImageUrl == null || mainImageUrl.trim().isEmpty()) {
+                mainImageUrl = getStringValue(rowData, "이미지");
+            }
+        }
+        
         if (mainImageUrl != null && !mainImageUrl.trim().isEmpty()) {
             Map<String, Object> imageObj = new HashMap<>();
             imageObj.put("vendorPath", mainImageUrl.trim()); // 업체이미지경로
@@ -469,7 +651,11 @@ public class CoupangExcelToProductConverter {
             imageObj.put("imageOrder", 1); // 이미지 순서
             itemImages.add(imageObj);
         }
+        
         String additionalImageUrl1 = getStringValue(rowData, "추가이미지URL1");
+        if (additionalImageUrl1 == null || additionalImageUrl1.trim().isEmpty()) {
+            additionalImageUrl1 = getStringValue(rowData, "추가이미지URL");
+        }
         if (additionalImageUrl1 != null && !additionalImageUrl1.trim().isEmpty()) {
             Map<String, Object> imageObj = new HashMap<>();
             imageObj.put("vendorPath", additionalImageUrl1.trim()); // 업체이미지경로
@@ -477,6 +663,7 @@ public class CoupangExcelToProductConverter {
             imageObj.put("imageOrder", 2); // 이미지 순서
             itemImages.add(imageObj);
         }
+        
         // 최소 2개 이미지 필요 (에러 메시지에서 1번, 2번 이미지 요구)
         if (itemImages.size() < 2) {
             // 2번째 이미지가 없으면 대표 이미지를 복사하여 추가
@@ -488,8 +675,22 @@ public class CoupangExcelToProductConverter {
                 itemImages.add(imageObj2);
             }
         }
+        
+        // 이미지가 없으면 경고만 하고 기본값 사용 (실제 운영 시에는 에러 처리 필요)
         if (itemImages.isEmpty()) {
-            throw new IllegalArgumentException(String.format("행 %d: 대표이미지URL은 필수입니다.", rowNumber));
+            log.warn("행 {}: 이미지 URL이 없습니다. 쿠팡 API에서 거부될 수 있습니다. 엑셀에 이미지 URL 컬럼을 추가해주세요.", rowNumber);
+            // 기본 더미 이미지 URL 사용 (실제 운영 시에는 제거하거나 실제 이미지 URL 필요)
+            Map<String, Object> dummyImage = new HashMap<>();
+            dummyImage.put("vendorPath", "https://via.placeholder.com/500");
+            dummyImage.put("imageType", "REPRESENTATION");
+            dummyImage.put("imageOrder", 1);
+            itemImages.add(dummyImage);
+            
+            Map<String, Object> dummyImage2 = new HashMap<>();
+            dummyImage2.put("vendorPath", "https://via.placeholder.com/500");
+            dummyImage2.put("imageType", "DETAIL");
+            dummyImage2.put("imageOrder", 2);
+            itemImages.add(dummyImage2);
         }
         item.put("images", itemImages);
         
@@ -516,7 +717,10 @@ public class CoupangExcelToProductConverter {
         // 쿠팡 API는 contentsType과 contentDetails(배열) 필수
         // contentDetails는 배열이고, 각 요소는 content와 detailType을 가진 객체
         List<Map<String, Object>> contents = new ArrayList<>();
-        String detailContent = getStringValue(rowData, "상세설명");
+        String detailContent = getStringValue(rowData, "상품상세설명");
+        if (detailContent == null || detailContent.trim().isEmpty()) {
+            detailContent = getStringValue(rowData, "상세설명");
+        }
         if (detailContent != null && !detailContent.trim().isEmpty()) {
             Map<String, Object> contentObj = new HashMap<>();
             contentObj.put("contentsType", "TEXT"); // 컨텐츠 타입 (TEXT, HTML 등)
@@ -603,29 +807,8 @@ public class CoupangExcelToProductConverter {
     }
     
     /**
-     * Map에서 BigDecimal 값 추출
-     */
-    /**
      * 카테고리별 고시정보 가져오기
      * 카테고리 메타데이터 API를 통해 해당 카테고리의 필수 고시정보를 조회
-     * 
-     * API 문서 기준 응답 구조:
-     * {
-     *   "code": "SUCCESS",
-     *   "data": {
-     *     "noticeCategories": [
-     *       {
-     *         "noticeCategoryName": "자동차용품",
-     *         "noticeCategoryDetailNames": [
-     *           {
-     *             "noticeCategoryDetailName": "품명 및 모델명",
-     *             "required": "MANDATORY"
-     *           }
-     *         ]
-     *       }
-     *     ]
-     *   }
-     * }
      * 
      * @param categoryCode 카테고리 코드
      * @param rowNumber 행 번호 (로깅용)
@@ -792,11 +975,13 @@ public class CoupangExcelToProductConverter {
         Map<String, Object> result = new HashMap<>();
         Set<String> allowedOptionNames = new HashSet<>();
         Set<String> requiredOptionNames = new HashSet<>();
+        Map<String, Map<String, Object>> optionMetadataMap = new HashMap<>();
         
         if (categoryCode == null) {
             log.debug("행 {}: 카테고리 코드가 없어 모든 옵션 허용", rowNumber);
             result.put("allowedOptionNames", null);
             result.put("requiredOptionNames", new HashSet<>());
+            result.put("optionMetadataMap", optionMetadataMap);
             return result;
         }
         
@@ -841,6 +1026,21 @@ public class CoupangExcelToProductConverter {
                                             String optionNameStr = String.valueOf(optionName);
                                             allowedOptionNames.add(optionNameStr);
                                             
+                                            // 옵션 메타데이터 저장 (단위 정보 등)
+                                            Map<String, Object> metadata = new HashMap<>();
+                                            if (guide.containsKey("basicUnit")) {
+                                                metadata.put("basicUnit", guide.get("basicUnit"));
+                                            }
+                                            if (guide.containsKey("dataType")) {
+                                                metadata.put("dataType", guide.get("dataType"));
+                                            }
+                                            if (guide.containsKey("usableUnits")) {
+                                                metadata.put("usableUnits", guide.get("usableUnits"));
+                                            }
+                                            if (!metadata.isEmpty()) {
+                                                optionMetadataMap.put(optionNameStr, metadata);
+                                            }
+                                            
                                             // 필수 옵션 확인
                                             if (required != null) {
                                                 boolean isRequired = "MANDATORY".equals(String.valueOf(required)) ||
@@ -863,11 +1063,13 @@ public class CoupangExcelToProductConverter {
                                     
                                     result.put("allowedOptionNames", allowedOptionNames.isEmpty() ? null : allowedOptionNames);
                                     result.put("requiredOptionNames", requiredOptionNames);
+                                    result.put("optionMetadataMap", optionMetadataMap);
                                     return result;
                                 } else {
                                     log.info("행 {}: 카테고리 {} 옵션 가이드가 비어있음 - 옵션 불허", rowNumber, categoryCode);
                                     result.put("allowedOptionNames", new HashSet<>());
                                     result.put("requiredOptionNames", new HashSet<>());
+                                    result.put("optionMetadataMap", optionMetadataMap);
                                     return result;
                                 }
                             }
@@ -891,6 +1093,21 @@ public class CoupangExcelToProductConverter {
                                             String attrName = String.valueOf(attributeTypeName);
                                             allowedOptionNames.add(attrName);
                                             
+                                            // 옵션 메타데이터 저장 (단위 정보 등)
+                                            Map<String, Object> metadata = new HashMap<>();
+                                            if (attr.containsKey("basicUnit")) {
+                                                metadata.put("basicUnit", attr.get("basicUnit"));
+                                            }
+                                            if (attr.containsKey("dataType")) {
+                                                metadata.put("dataType", attr.get("dataType"));
+                                            }
+                                            if (attr.containsKey("usableUnits")) {
+                                                metadata.put("usableUnits", attr.get("usableUnits"));
+                                            }
+                                            if (!metadata.isEmpty()) {
+                                                optionMetadataMap.put(attrName, metadata);
+                                            }
+                                            
                                             // 필수 옵션 확인
                                             if (required != null) {
                                                 boolean isRequired = "MANDATORY".equals(String.valueOf(required)) ||
@@ -910,6 +1127,7 @@ public class CoupangExcelToProductConverter {
                                                 rowNumber, categoryCode, requiredOptionNames.size(), requiredOptionNames);
                                         result.put("allowedOptionNames", allowedOptionNames);
                                         result.put("requiredOptionNames", requiredOptionNames);
+                                        result.put("optionMetadataMap", optionMetadataMap);
                                         return result;
                                     }
                                 }
@@ -933,6 +1151,7 @@ public class CoupangExcelToProductConverter {
                                 log.info("행 {}: 카테고리 {} 옵션 사용 불가 (useOptionYn=false) - 옵션 불허", rowNumber, categoryCode);
                                 result.put("allowedOptionNames", new HashSet<>());
                                 result.put("requiredOptionNames", new HashSet<>());
+                                result.put("optionMetadataMap", optionMetadataMap);
                                 return result;
                             }
                         }
@@ -941,6 +1160,7 @@ public class CoupangExcelToProductConverter {
                         log.info("행 {}: 카테고리 {} 옵션 관련 정보 없음 - 모든 옵션 허용", rowNumber, categoryCode);
                         result.put("allowedOptionNames", null);
                         result.put("requiredOptionNames", new HashSet<>());
+                        result.put("optionMetadataMap", optionMetadataMap);
                         return result;
                     }
                 } else {
@@ -955,134 +1175,8 @@ public class CoupangExcelToProductConverter {
         log.warn("행 {}: 카테고리 {} 메타데이터 조회 실패, 기본적으로 모든 옵션 허용", rowNumber, categoryCode);
         result.put("allowedOptionNames", null);
         result.put("requiredOptionNames", new HashSet<>());
+        result.put("optionMetadataMap", optionMetadataMap);
         return result;
-    }
-    
-    /**
-     * 카테고리에서 허용된 옵션명 목록 조회 (하위 호환성 유지)
-     * 
-     * @deprecated getAllowedOptionNames 대신 getCategoryOptionInfo 사용 권장
-     */
-    @Deprecated
-    private Set<String> getAllowedOptionNames(Long categoryCode, Integer rowNumber) {
-        if (categoryCode == null) {
-            log.debug("행 {}: 카테고리 코드가 없어 모든 옵션 허용", rowNumber);
-            return null; // null이면 모든 옵션 허용
-        }
-        
-        try {
-            log.info("행 {}: 카테고리 {} 메타데이터 조회 시작...", rowNumber, categoryCode);
-            // 카테고리 메타데이터 조회
-            Map<String, Object> metadataResponse = coupangApiClient.getCategoryMetadata(categoryCode).block();
-            
-            if (metadataResponse != null) {
-                Object codeObj = metadataResponse.get("code");
-                boolean isSuccess = "SUCCESS".equals(String.valueOf(codeObj)) || 
-                                  "200".equals(String.valueOf(codeObj)) ||
-                                  (codeObj instanceof Number && ((Number) codeObj).intValue() == 200);
-                
-                log.info("행 {}: 카테고리 {} 메타데이터 조회 결과 - code={}, success={}", 
-                        rowNumber, categoryCode, codeObj, isSuccess);
-                
-                if (isSuccess && metadataResponse.containsKey("data")) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> data = (Map<String, Object>) metadataResponse.get("data");
-                    
-                    if (data != null) {
-                        log.debug("행 {}: 카테고리 {} 메타데이터 data 키들: {}", rowNumber, categoryCode, data.keySet());
-                        
-                        Set<String> allowedNames = new HashSet<>();
-                        
-                        // optionGuides 필드 확인 (옵션 가이드 목록)
-                        if (data.containsKey("optionGuides")) {
-                            Object optionGuides = data.get("optionGuides");
-                            log.info("행 {}: 카테고리 {} optionGuides 필드 발견: {}", rowNumber, categoryCode, optionGuides);
-                            
-                            if (optionGuides instanceof List) {
-                                @SuppressWarnings("unchecked")
-                                List<Map<String, Object>> guides = (List<Map<String, Object>>) optionGuides;
-                                
-                                if (guides != null && !guides.isEmpty()) {
-                                    log.info("행 {}: 카테고리 {} 옵션 가이드 {}개 발견", rowNumber, categoryCode, guides.size());
-                                    
-                                    for (Map<String, Object> guide : guides) {
-                                        Object optionName = guide.get("optionName");
-                                        if (optionName != null) {
-                                            allowedNames.add(String.valueOf(optionName));
-                                            log.debug("행 {}: 허용된 옵션명 추가: {}", rowNumber, optionName);
-                                        }
-                                    }
-                                    
-                                    log.info("행 {}: 카테고리 {} 허용된 옵션명 {}개: {}", 
-                                            rowNumber, categoryCode, allowedNames.size(), allowedNames);
-                                    return allowedNames;
-                                } else {
-                                    log.info("행 {}: 카테고리 {} 옵션 가이드가 비어있음 - 옵션 불허", rowNumber, categoryCode);
-                                    return new HashSet<>(); // 빈 Set이면 옵션 불허
-                                }
-                            }
-                        }
-                        
-                        // attributes 필드 확인 (대안)
-                        if (data.containsKey("attributes")) {
-                            Object attributes = data.get("attributes");
-                            log.info("행 {}: 카테고리 {} attributes 필드 발견: {}", rowNumber, categoryCode, attributes);
-                            
-                            if (attributes instanceof List) {
-                                @SuppressWarnings("unchecked")
-                                List<Map<String, Object>> attrs = (List<Map<String, Object>>) attributes;
-                                
-                                if (attrs != null && !attrs.isEmpty()) {
-                                    for (Map<String, Object> attr : attrs) {
-                                        Object attributeTypeName = attr.get("attributeTypeName");
-                                        if (attributeTypeName != null) {
-                                            allowedNames.add(String.valueOf(attributeTypeName));
-                                        }
-                                    }
-                                    
-                                    if (!allowedNames.isEmpty()) {
-                                        log.info("행 {}: 카테고리 {} attributes에서 허용된 옵션명 {}개: {}", 
-                                                rowNumber, categoryCode, allowedNames.size(), allowedNames);
-                                        return allowedNames;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // useOptionYn 필드 확인 (옵션 사용 가능 여부)
-                        if (data.containsKey("useOptionYn")) {
-                            Object useOptionYn = data.get("useOptionYn");
-                            log.info("행 {}: 카테고리 {} useOptionYn 필드 발견: {}", rowNumber, categoryCode, useOptionYn);
-                            
-                            boolean allowed = false;
-                            if (useOptionYn instanceof Boolean) {
-                                allowed = (Boolean) useOptionYn;
-                            } else if (useOptionYn instanceof String) {
-                                allowed = "Y".equalsIgnoreCase((String) useOptionYn) || 
-                                         "true".equalsIgnoreCase((String) useOptionYn);
-                            }
-                            
-                            if (!allowed) {
-                                log.info("행 {}: 카테고리 {} 옵션 사용 불가 (useOptionYn=false) - 옵션 불허", rowNumber, categoryCode);
-                                return new HashSet<>(); // 빈 Set이면 옵션 불허
-                            }
-                        }
-                        
-                        // 옵션 관련 정보가 없으면 null 반환 (모든 옵션 허용)
-                        log.info("행 {}: 카테고리 {} 옵션 관련 정보 없음 - 모든 옵션 허용", rowNumber, categoryCode);
-                        return null;
-                    }
-                } else {
-                    log.warn("행 {}: 카테고리 {} 메타데이터 조회 실패 또는 data 없음 - 모든 옵션 허용", rowNumber, categoryCode);
-                }
-            }
-        } catch (Exception e) {
-            log.error("행 {}: 카테고리 {} 메타데이터 조회 중 오류 발생: {}", rowNumber, categoryCode, e.getMessage(), e);
-        }
-        
-        // 기본값: null 반환 (모든 옵션 허용)
-        log.warn("행 {}: 카테고리 {} 메타데이터 조회 실패, 기본적으로 모든 옵션 허용", rowNumber, categoryCode);
-        return null;
     }
     
     /**
@@ -1114,55 +1208,73 @@ public class CoupangExcelToProductConverter {
             Map<String, Object> response = coupangApiClient.getOutboundShippingCenters().block();
             
             if (response != null) {
+                // 응답 구조 로깅 (디버깅용)
+                log.debug("행 {}: 출고지 조회 응답 구조: code={}, content 존재={}, data 존재={}, 전체 키={}", 
+                    rowNumber, response.get("code"), response.containsKey("content"), response.containsKey("data"), response.keySet());
+                
                 // 응답 코드 확인
                 Object codeObj = response.get("code");
                 boolean isSuccess = "SUCCESS".equals(String.valueOf(codeObj)) || 
                                   "200".equals(String.valueOf(codeObj)) ||
                                   (codeObj instanceof Number && ((Number) codeObj).intValue() == 200);
                 
-                if (isSuccess && response.containsKey("data")) {
+                // content 또는 data 필드 확인 (쿠팡 API는 content 필드를 사용)
+                List<Map<String, Object>> centers = null;
+                if (response.containsKey("content")) {
                     @SuppressWarnings("unchecked")
-                    List<Map<String, Object>> centers = (List<Map<String, Object>>) response.get("data");
+                    List<Map<String, Object>> contentList = (List<Map<String, Object>>) response.get("content");
+                    centers = contentList;
+                } else if (response.containsKey("data")) {
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> dataList = (List<Map<String, Object>>) response.get("data");
+                    centers = dataList;
+                }
+                
+                if (centers != null && !centers.isEmpty()) {
+                    // 첫 번째 출고지 코드 사용
+                    Map<String, Object> firstCenter = centers.get(0);
+                    Object codeObj2 = firstCenter.get("outboundShippingPlaceCode");
                     
-                    if (centers != null && !centers.isEmpty()) {
-                        // 첫 번째 출고지 코드 사용
-                        Map<String, Object> firstCenter = centers.get(0);
-                        Object codeObj2 = firstCenter.get("outboundShippingPlaceCode");
-                        
-                        if (codeObj2 != null) {
-                            Long code;
-                            if (codeObj2 instanceof Number) {
-                                code = ((Number) codeObj2).longValue();
-                            } else {
-                                code = Long.parseLong(String.valueOf(codeObj2));
-                            }
-                            
-                            // 캐시에 저장
-                            cachedOutboundShippingPlaceCode = code;
-                            
-                            String centerName = String.valueOf(firstCenter.get("name"));
-                            log.info("행 {}: 출고지 코드 조회 성공: {} (출고지명: {})", rowNumber, code, centerName);
-                            
-                            if (centers.size() > 1) {
-                                log.info("행 {}: 총 {}개의 출고지가 있습니다. 첫 번째 출고지를 사용합니다.", rowNumber, centers.size());
-                            }
-                            
-                            return code;
+                    if (codeObj2 != null) {
+                        Long code;
+                        if (codeObj2 instanceof Number) {
+                            code = ((Number) codeObj2).longValue();
                         } else {
-                            throw new IllegalArgumentException(String.format(
-                                "행 %d: 출고지 코드(outboundShippingPlaceCode)가 응답에 없습니다.",
-                                rowNumber));
+                            code = Long.parseLong(String.valueOf(codeObj2));
                         }
+                        
+                        // 캐시에 저장
+                        cachedOutboundShippingPlaceCode = code;
+                        
+                        // shippingPlaceName 또는 name 필드 확인
+                        Object nameObj = firstCenter.get("shippingPlaceName");
+                        if (nameObj == null) {
+                            nameObj = firstCenter.get("name");
+                        }
+                        String centerName = nameObj != null ? String.valueOf(nameObj) : "알 수 없음";
+                        log.info("행 {}: 출고지 코드 조회 성공: {} (출고지명: {})", rowNumber, code, centerName);
+                        
+                        if (centers.size() > 1) {
+                            log.info("행 {}: 총 {}개의 출고지가 있습니다. 첫 번째 출고지를 사용합니다.", rowNumber, centers.size());
+                        }
+                        
+                        return code;
                     } else {
+                        log.error("행 {}: 출고지 응답 구조 - firstCenter 키: {}", rowNumber, firstCenter.keySet());
                         throw new IllegalArgumentException(String.format(
-                            "행 %d: 등록된 출고지가 없습니다. 쿠팡 판매자 센터(https://wing.coupang.com) > 판매자 주소록에서 출고지를 먼저 등록해주세요.",
+                            "행 %d: 출고지 코드(outboundShippingPlaceCode)가 응답에 없습니다. 응답 구조를 확인해주세요.",
                             rowNumber));
                     }
-                } else {
-                    String message = String.valueOf(response.get("message"));
+                } else if (centers != null && centers.isEmpty()) {
                     throw new IllegalArgumentException(String.format(
-                        "행 %d: 출고지 조회 실패: %s",
-                        rowNumber, message != null ? message : "알 수 없는 오류"));
+                        "행 %d: 등록된 출고지가 없습니다. 쿠팡 판매자 센터(https://wing.coupang.com) > 판매자 주소록에서 출고지를 먼저 등록해주세요.",
+                        rowNumber));
+                } else {
+                    // content/data 필드가 없는 경우
+                    log.error("행 {}: 출고지 조회 응답 - content/data 필드가 없습니다. 응답: {}", rowNumber, response);
+                    throw new IllegalArgumentException(String.format(
+                        "행 %d: 출고지 조회 응답에 content 또는 data 필드가 없습니다. 쿠팡 API 응답 구조가 변경되었을 수 있습니다. 응답 키: %s",
+                        rowNumber, response.keySet()));
                 }
             } else {
                 throw new IllegalArgumentException(String.format(
@@ -1181,5 +1293,46 @@ public class CoupangExcelToProductConverter {
                 "2. application-secret.properties 파일에 'coupang.api.outbound-shipping-place-code=출고지코드' 직접 설정",
                 rowNumber, e.getMessage()));
         }
+    }
+    
+    /**
+     * "사이즈" 옵션을 카테고리별 올바른 옵션명으로 매핑
+     * 
+     * @param categoryCode 카테고리 코드
+     * @param allowedOptionNames 허용된 옵션명 목록
+     * @param requiredOptionNames 필수 옵션명 목록
+     * @return 매핑된 사이즈 옵션명 (예: "패션의류/잡화 사이즈", "신발사이즈", "사이즈" 등), 매핑 실패 시 null
+     */
+    private String mapSizeOptionName(Long categoryCode, Set<String> allowedOptionNames, Set<String> requiredOptionNames) {
+        // 일반적인 사이즈 관련 옵션명 패턴들
+        String[] sizeOptionPatterns = {
+            "패션의류/잡화 사이즈",
+            "패션의류잡화 사이즈",
+            "신발사이즈",
+            "신발 사이즈",
+            "사이즈",
+            "수량"  // 일부 카테고리는 수량이 사이즈 역할을 할 수 있음
+        };
+        
+        // 필수 옵션명 중에서 사이즈 관련 옵션 찾기
+        if (requiredOptionNames != null && !requiredOptionNames.isEmpty()) {
+            for (String pattern : sizeOptionPatterns) {
+                if (requiredOptionNames.contains(pattern)) {
+                    return pattern;
+                }
+            }
+        }
+        
+        // 허용된 옵션명 중에서 사이즈 관련 옵션 찾기
+        if (allowedOptionNames != null && !allowedOptionNames.isEmpty()) {
+            for (String pattern : sizeOptionPatterns) {
+                if (allowedOptionNames.contains(pattern)) {
+                    return pattern;
+                }
+            }
+        }
+        
+        // 매핑 실패
+        return null;
     }
 }

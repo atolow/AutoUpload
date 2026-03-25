@@ -19,11 +19,13 @@ import java.util.Map;
 /**
  * 상품 업로드 서비스
  * 엑셀 파일 업로드 및 플랫폼별 배치 업로드를 처리합니다.
+ * 
+ * 배치 업로드는 트랜잭션을 사용하지 않습니다. 각 항목별로 독립적으로 처리되며,
+ * 일부 항목이 실패해도 다른 항목의 처리는 계속됩니다.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Transactional
 public class ProductUploadService {
     
     private final ExcelService excelService;
@@ -40,15 +42,22 @@ public class ProductUploadService {
      * 
      * @param file 엑셀 파일
      * @param platform 플랫폼 코드 (naver, coupang, 11st)
+     * @param company 회사명 (회사별 엑셀 컬럼 구조 구분용, 기본값: TestCompany)
      * @return 업로드 결과
      * @throws IllegalArgumentException 파일 검증 실패 또는 플랫폼 오류
      * @throws IOException 파일 읽기 실패
      */
-    public ExcelUploadResult uploadProductsFromExcel(MultipartFile file, String platform) 
+    public ExcelUploadResult uploadProductsFromExcel(MultipartFile file, String platform, String company) 
             throws IllegalArgumentException, IOException {
         
-        log.info("상품 업로드 서비스 시작: fileName={}, size={}, platform={}", 
-                file.getOriginalFilename(), file.getSize(), platform);
+        // 회사명 기본값 설정
+        if (company == null || company.trim().isEmpty()) {
+            company = "TestCompany";
+        }
+        company = company.trim();
+        
+        log.info("상품 업로드 서비스 시작: fileName={}, size={}, platform={}, company={}", 
+                file.getOriginalFilename(), file.getSize(), platform, company);
         
         // 플랫폼 검증
         validatePlatform(platform);
@@ -71,11 +80,11 @@ public class ProductUploadService {
         // 엑셀 파일 파싱
         List<Map<String, Object>> excelRows = parseExcelFile(file);
         
-        // 플랫폼별 배치 업로드 실행
-        ExcelUploadResult result = executeBatchUpload(platformLower, storeId, excelRows);
+        // 플랫폼별 배치 업로드 실행 (회사명 전달)
+        ExcelUploadResult result = executeBatchUpload(platformLower, storeId, excelRows, company);
         
-        log.info("상품 업로드 서비스 완료: 플랫폼={}, 총 {}개, 성공 {}개, 실패 {}개", 
-                platformLower, result.getTotalCount(), result.getSuccessCount(), result.getFailureCount());
+        log.info("상품 업로드 서비스 완료: 플랫폼={}, 회사={}, 총 {}개, 성공 {}개, 실패 {}개", 
+                platformLower, company, result.getTotalCount(), result.getSuccessCount(), result.getFailureCount());
         
         return result;
     }
@@ -128,29 +137,52 @@ public class ProductUploadService {
     /**
      * 플랫폼별 배치 업로드 실행
      * SUPPORTED_PLATFORMS에 추가된 플랫폼을 자동으로 인식합니다.
+     * 
+     * @param platform 플랫폼 코드
+     * @param storeId 스토어 ID
+     * @param excelRows 엑셀 행 데이터
+     * @param company 회사명 (회사별 엑셀 컬럼 구조 구분용)
+     * @return 업로드 결과
      */
-    private ExcelUploadResult executeBatchUpload(String platform, Long storeId, List<Map<String, Object>> excelRows) {
-        log.info("플랫폼별 배치 업로드 실행: 플랫폼={}, 스토어 ID={}, 행 수={}", platform, storeId, excelRows.size());
+    private ExcelUploadResult executeBatchUpload(String platform, Long storeId, List<Map<String, Object>> excelRows, String company) {
+        log.info("플랫폼별 배치 업로드 실행: 플랫폼={}, 스토어 ID={}, 행 수={}, 회사={}", platform, storeId, excelRows.size(), company);
         
         // 플랫폼별 BatchUploadService 동적 찾기
         // 네이밍 규칙: {platform}BatchUploadService (예: naverBatchUploadService, coupangBatchUploadService)
         String serviceBeanName = getPlatformServiceBeanName(platform);
         
+        Object platformService;
         try {
-            Object platformService = applicationContext.getBean(serviceBeanName);
-            
-            // 리플렉션을 사용하여 batchUploadProducts 메서드 호출
-            java.lang.reflect.Method method = platformService.getClass()
-                    .getMethod("batchUploadProducts", Long.class, List.class);
-            
-            log.info("{} 플랫폼으로 배치 업로드 시작", platform);
-            return (ExcelUploadResult) method.invoke(platformService, storeId, excelRows);
-            
+            platformService = applicationContext.getBean(serviceBeanName);
         } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
             log.warn("{} 플랫폼의 배치 업로드 서비스를 찾을 수 없습니다: {}", platform, serviceBeanName);
             throw new IllegalArgumentException(
                     String.format("%s 플랫폼은 아직 지원되지 않습니다. %s 서비스를 구현해주세요.", 
                             platform, serviceBeanName));
+        }
+        
+        try {
+            // 리플렉션을 사용하여 batchUploadProducts 메서드 호출 (회사명 파라미터 추가)
+            java.lang.reflect.Method method = platformService.getClass()
+                    .getMethod("batchUploadProducts", Long.class, List.class, String.class);
+            
+            log.info("{} 플랫폼으로 배치 업로드 시작 (회사: {})", platform, company);
+            return (ExcelUploadResult) method.invoke(platformService, storeId, excelRows, company);
+            
+        } catch (NoSuchMethodException e) {
+            // 회사명 파라미터가 없는 기존 메서드 시그니처 시도 (하위 호환성)
+            try {
+                java.lang.reflect.Method method = platformService.getClass()
+                        .getMethod("batchUploadProducts", Long.class, List.class);
+                
+                log.info("{} 플랫폼으로 배치 업로드 시작 (기존 메서드 사용, 회사명 무시)", platform);
+                return (ExcelUploadResult) method.invoke(platformService, storeId, excelRows);
+            } catch (Exception e2) {
+                log.error("{} 플랫폼 배치 업로드 실행 중 오류 발생", platform, e2);
+                throw new IllegalArgumentException(
+                        String.format("%s 플랫폼 배치 업로드 실행 중 오류가 발생했습니다: %s", 
+                                platform, e2.getMessage()));
+            }
         } catch (Exception e) {
             log.error("{} 플랫폼 배치 업로드 실행 중 오류 발생", platform, e);
             throw new IllegalArgumentException(

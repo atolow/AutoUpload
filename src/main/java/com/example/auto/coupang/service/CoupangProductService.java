@@ -27,7 +27,6 @@ public class CoupangProductService implements ProductService {
     private final CoupangApiClient coupangApiClient;
     private final CoupangProperties coupangProperties;
     private final StoreService storeService;
-    private final CoupangExcelToProductConverter excelConverter;
     
     /**
      * 현재 등록된 스토어 조회 (독립 실행형용)
